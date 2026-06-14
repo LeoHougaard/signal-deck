@@ -75,6 +75,13 @@ def rank_ideas(
         feedback_raw = clamp(feedback_by_idea.get(idea_id, 0.0) / 5.0, -1.0, 1.0)
         feedback_display = clamp((feedback_raw + 1.0) / 2.0)
         gem = max([float(item["score"]) for item in discoveries], default=0.0)
+        media = [_item for _item in discoveries if _is_media_discovery(_item)]
+        research = [_item for _item in discoveries if _item not in media]
+        media_count = min(1.0, len(media) / 4.0)
+        media_gem = max([float(item["score"]) for item in media], default=0.0)
+        media_recency = max([freshness_from_iso(str(item["updated_at"] or item["created_at"] or "")) for item in media], default=0.0)
+        research_quality = _avg([float(item["score"]) for item in research])
+        media_signal = clamp((0.35 * media_count) + (0.45 * media_gem) + (0.20 * media_recency))
         total = clamp(
             0.20 * activity
             + weights["feedback"] * feedback_raw
@@ -82,6 +89,8 @@ def rank_ideas(
             + weights["gem"] * gem
             + weights["novelty"] * novelty
             + weights["diversity"] * diversity
+            + 0.18 * media_signal
+            + 0.08 * research_quality
         )
         ranked.append(
             {
@@ -95,6 +104,7 @@ def rank_ideas(
                 "relevance": relevance,
                 "novelty": novelty,
                 "diversity": diversity,
+                "media_score": media_signal,
                 "discoveries": discoveries,
             }
         )
@@ -114,3 +124,18 @@ def _avg(values: list[float]) -> float:
     if not values:
         return 0.0
     return sum(values) / len(values)
+
+
+def _is_media_discovery(item: sqlite3.Row) -> bool:
+    source = str(item["source_type"]).lower()
+    url = str(item["url"]).lower()
+    title = str(item["title"]).lower()
+    try:
+        image_url = str(item["image_url"] or "")
+    except (KeyError, IndexError):
+        image_url = ""
+    if source == "youtube" or "youtube.com/watch" in url or "youtu.be/" in url:
+        return True
+    if source == "arxiv" or "arxiv.org" in url or url.endswith(".pdf") or "paper" in title:
+        return True
+    return bool(image_url)

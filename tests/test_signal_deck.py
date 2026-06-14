@@ -16,11 +16,12 @@ from signal_deck.chat_config import apply_chat_config
 from signal_deck.config import load_config, load_sources, save_config
 from signal_deck.diagnostics import doctor, export_json, status
 from signal_deck.importer import import_markdown_zip
-from signal_deck.render import render_dashboards
+from signal_deck.render import render_dashboards, render_idea_detail
 from signal_deck.research import (
     Candidate,
     attach_candidates,
     fetch_codex_agent_research,
+    fetch_youtube_metadata,
     parse_openai_response,
     run_codex_agent_test,
     run_refresh,
@@ -37,6 +38,7 @@ from signal_deck.state import (
     latest_successful_run_date,
     list_discoveries,
     list_ideas,
+    relation_note_map,
     record_run_finish,
     record_run_start,
     upsert_idea,
@@ -147,8 +149,286 @@ class SignalDeckTests(unittest.TestCase):
                 conn.close()
             paths = render_dashboards(vault)
             html = paths["html"].read_text(encoding="utf-8").lower()
-            self.assertIn("helix robot build", html)
+            self.assertIn('/idea?idea_id=ideas%2fvideo.md', html)
+            self.assertIn("related media preview", html)
+            self.assertNotIn("helix robot build", html)
+            detail = render_idea_detail(vault, idea.id).lower()
+            self.assertIn("helix robot build", detail)
+            self.assertIn("media found for this idea", detail)
             self.assertNotIn("transcript", html)
+
+    def test_idea_first_dashboard_and_detail_media_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "alpha.md").write_text("# Alpha idea\n\nalpha body text\n", encoding="utf-8")
+            (vault / "Ideas" / "beta.md").write_text("# Beta idea\n\nbeta body text\n", encoding="utf-8")
+            conn = connect(vault)
+            try:
+                for idea in scan_ideas(vault):
+                    upsert_idea(conn, idea)
+                add_discovery(
+                    conn,
+                    {
+                        "idea_id": "Ideas/alpha.md",
+                        "source_type": "youtube",
+                        "title": "Alpha video",
+                        "url": "https://www.youtube.com/watch?v=alpha",
+                        "summary": "Visual support for alpha.",
+                        "why": "Attached to alpha.",
+                        "score": 0.9,
+                        "novelty": 0.8,
+                        "image_url": "https://img.youtube.com/vi/alpha/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+                add_discovery(
+                    conn,
+                    {
+                        "idea_id": "Ideas/beta.md",
+                        "source_type": "youtube",
+                        "title": "Beta video",
+                        "url": "https://www.youtube.com/watch?v=beta",
+                        "summary": "Visual support for beta.",
+                        "why": "Attached to beta.",
+                        "score": 0.7,
+                        "novelty": 0.6,
+                        "image_url": "https://img.youtube.com/vi/beta/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+                add_discovery(
+                    conn,
+                    {
+                        "idea_id": "Ideas/alpha.md",
+                        "source_type": "manual",
+                        "title": "Related idea: Beta idea",
+                        "url": "Ideas/beta.md",
+                        "summary": "Beta relationship.",
+                        "why": "Local related idea.",
+                        "score": 0.6,
+                        "novelty": 0.5,
+                        "citations": [],
+                    },
+                )
+            finally:
+                conn.close()
+
+            dashboard = render_dashboards(vault)["html"].read_text(encoding="utf-8")
+            self.assertNotIn("Media and papers", dashboard)
+            self.assertNotIn("media-shelf", dashboard)
+            self.assertIn('class="idea-card"', dashboard)
+            self.assertIn('href="/idea?idea_id=Ideas%2Falpha.md"', dashboard)
+            self.assertIn("https://img.youtube.com/vi/alpha/hqdefault.jpg", dashboard)
+            self.assertIn("https://img.youtube.com/vi/beta/hqdefault.jpg", dashboard)
+
+            alpha_detail = render_idea_detail(vault, "Ideas/alpha.md")
+            beta_detail = render_idea_detail(vault, "Ideas/beta.md")
+            self.assertLess(alpha_detail.index("alpha body text"), alpha_detail.index("Media found for this idea"))
+            self.assertIn("Alpha video", alpha_detail)
+            self.assertNotIn("Beta video", alpha_detail)
+            self.assertIn('id="idea-title"', alpha_detail)
+            self.assertIn('id="idea-body"', alpha_detail)
+            self.assertIn('id="idea-summary"', alpha_detail)
+            self.assertIn('id="idea-notes"', alpha_detail)
+            self.assertIn("Related ideas", alpha_detail)
+            self.assertIn('href="/idea?idea_id=Ideas%2Fbeta.md"', alpha_detail)
+            self.assertIn("Beta video", beta_detail)
+            self.assertNotIn("Alpha video", beta_detail)
+
+            server = SignalDeckServer(("127.0.0.1", 0), vault)
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                conn_http = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                conn_http.request(
+                    "POST",
+                    "/ideas/relation-note",
+                    body=json.dumps(
+                        {
+                            "idea_id": "Ideas/alpha.md",
+                            "related_idea_id": "Ideas/beta.md",
+                            "note": "Beta supplies the contrasting prototype.",
+                        }
+                    ),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = conn_http.getresponse()
+                self.assertEqual(response.status, 200)
+                conn_http.close()
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                server.server_close()
+            conn = connect(vault)
+            try:
+                self.assertEqual(
+                    relation_note_map(conn, "Ideas/alpha.md")["Ideas/beta.md"],
+                    "Beta supplies the contrasting prototype.",
+                )
+            finally:
+                conn.close()
+
+    def test_youtube_seed_drives_search_but_is_not_returned(self) -> None:
+        seed = Candidate(
+            "youtube",
+            "High Precision Angular Gearbox, 3D Printed and Tested",
+            "https://www.youtube.com/watch?v=VXcuryyRGbo",
+            "Video seed from Mishin Machine.",
+            channel="Mishin Machine",
+            image_url="https://img.youtube.com/vi/VXcuryyRGbo/hqdefault.jpg",
+        )
+        found = Candidate(
+            "youtube",
+            "Cycloidal gearbox prototype test",
+            "https://www.youtube.com/watch?v=newvideo",
+            "Found by nightly video search.",
+            image_url="https://img.youtube.com/vi/newvideo/hqdefault.jpg",
+        )
+        sources = {"youtube_urls": [seed.url], "youtube_queries": [], "youtube_channel_ids": []}
+        cfg = load_config(Path(tempfile.gettempdir()))
+        cfg["research"]["max_video_searches"] = 1
+        idea = type("IdeaStub", (), {"title": "Compact gearbox", "modified_at": time.time()})()
+        with patch("signal_deck.research._youtube_url_candidate", return_value=seed):
+            with patch("signal_deck.research._youtube_search_web", return_value=[found]) as mocked_search:
+                candidates = fetch_youtube_metadata(cfg, sources, 5, [idea], {seed.url})
+        self.assertEqual([candidate.url for candidate in candidates], [found.url])
+        self.assertIn("gearbox", mocked_search.call_args.args[0].lower())
+
+    def test_media_requires_idea_specific_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "offset-arm.md").write_text(
+                "# Dual offset arm suspension\n\nConverts to linear motion for sailing linkage.\n",
+                encoding="utf-8",
+            )
+            idea = scan_ideas(vault)[0]
+            cfg = load_config(vault)
+            conn = connect(vault)
+            try:
+                upsert_idea(conn, idea)
+                generic = Candidate(
+                    "youtube",
+                    "Transparent 3D Printing!",
+                    "https://www.youtube.com/watch?v=generic",
+                    "A general clear resin printing video.",
+                    image_url="https://img.youtube.com/vi/generic/hqdefault.jpg",
+                    source_id=f"youtube-query:{idea.id}",
+                )
+                specific = Candidate(
+                    "youtube",
+                    "Dual offset arm suspension linear sailing linkage prototype",
+                    "https://www.youtube.com/watch?v=specific",
+                    "Offset arm linkage converts rotary motion to linear motion for sailing.",
+                    image_url="https://img.youtube.com/vi/specific/hqdefault.jpg",
+                    source_id=f"youtube-query:{idea.id}",
+                )
+                inserted = attach_candidates(conn, cfg, [idea], [generic, specific])
+                self.assertEqual(inserted, 1)
+                discoveries = list_discoveries(conn, idea.id)
+                self.assertEqual(len(discoveries), 1)
+                self.assertEqual(discoveries[0]["title"], specific.title)
+            finally:
+                conn.close()
+
+    def test_nightly_video_research_is_scoped_to_each_idea(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "alpha.md").write_text(
+                "# Alpha hydrofoil latch\n\ncambered hydrofoil latch sailing linkage\n",
+                encoding="utf-8",
+            )
+            (vault / "Ideas" / "beta.md").write_text(
+                "# Beta ceramic extruder\n\nhigh temperature ceramic paste extruder auger\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(vault)
+            cfg["research"]["rss"] = False
+            cfg["research"]["arxiv"] = False
+            cfg["research"]["local_ideas"] = False
+            cfg["research"]["ollama_reflections"] = False
+            cfg["research"]["codex_agent"] = False
+            cfg["research"]["openai_web"] = False
+            cfg["research"]["max_video_searches"] = 2
+            cfg["research"]["nightly_ideas_per_run"] = 2
+            save_config(vault, cfg)
+
+            def fake_search(query, limit, excluded_urls, source_id=""):
+                return [
+                    Candidate(
+                        "youtube",
+                        f"{query} fixture demo",
+                        f"https://www.youtube.com/watch?v={abs(hash(source_id))}",
+                        f"Specific result for {query}.",
+                        image_url="https://img.youtube.com/vi/scoped/hqdefault.jpg",
+                        source_id=source_id,
+                    )
+                ]
+
+            with patch("signal_deck.research._youtube_search_web", side_effect=fake_search) as mocked:
+                result = run_refresh(vault, "nightly")
+            self.assertEqual(result["status"], "ok")
+            source_ids = [call.args[3] for call in mocked.call_args_list]
+            self.assertIn("youtube-query:Ideas/alpha.md", source_ids)
+            self.assertIn("youtube-query:Ideas/beta.md", source_ids)
+            conn = connect(vault)
+            try:
+                alpha = [dict(row) for row in list_discoveries(conn, "Ideas/alpha.md")]
+                beta = [dict(row) for row in list_discoveries(conn, "Ideas/beta.md")]
+            finally:
+                conn.close()
+            self.assertTrue(alpha)
+            self.assertTrue(beta)
+            self.assertTrue(all("Alpha hydrofoil latch" in row["title"] for row in alpha))
+            self.assertTrue(all("Beta ceramic extruder" in row["title"] for row in beta))
+
+    def test_refresh_prunes_existing_generic_media(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "arm.md").write_text(
+                "# Dual offset arm suspension\n\nlinear sailing linkage\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(vault)
+            cfg["research"]["rss"] = False
+            cfg["research"]["arxiv"] = False
+            cfg["research"]["youtube"] = False
+            cfg["research"]["local_ideas"] = False
+            cfg["research"]["ollama_reflections"] = False
+            cfg["research"]["codex_agent"] = False
+            cfg["research"]["openai_web"] = False
+            save_config(vault, cfg)
+            idea = scan_ideas(vault)[0]
+            conn = connect(vault)
+            try:
+                upsert_idea(conn, idea)
+                add_discovery(
+                    conn,
+                    {
+                        "idea_id": idea.id,
+                        "source_type": "youtube",
+                        "title": "Transparent 3D Printing!",
+                        "url": "https://www.youtube.com/watch?v=generic",
+                        "summary": "A general clear resin printing video.",
+                        "why": "Old generic media.",
+                        "score": 0.8,
+                        "novelty": 0.6,
+                        "image_url": "https://img.youtube.com/vi/generic/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+            finally:
+                conn.close()
+            result = run_refresh(vault, "manual")
+            self.assertEqual(result["status"], "ok")
+            conn = connect(vault)
+            try:
+                self.assertEqual(list_discoveries(conn, idea.id), [])
+            finally:
+                conn.close()
 
     def test_offline_local_refresh_works_without_openai(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -215,8 +495,10 @@ class SignalDeckTests(unittest.TestCase):
             finally:
                 conn.close()
             html = render_dashboards(vault)["html"].read_text(encoding="utf-8")
-            self.assertIn('href="https://example.com/a"', html)
-            self.assertIn("Source A", html)
+            self.assertNotIn("Research pack", html)
+            detail = render_idea_detail(vault, idea.id)
+            self.assertIn('href="https://example.com/a"', detail)
+            self.assertIn("Source A", detail)
 
     def test_scheduler_time_and_chat_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -306,8 +588,12 @@ class SignalDeckTests(unittest.TestCase):
             save_config(vault, cfg)
             run_refresh(vault)
             html = (vault / "Signal Deck.html").read_text(encoding="utf-8")
-            self.assertIn('href="Ideas/', html)
+            self.assertIn('href="/idea?idea_id=Ideas%2Fa.md"', html)
             self.assertIn('id="filter"', html)
+            self.assertNotIn("Media and papers", html)
+            detail = render_idea_detail(vault, "Ideas/a.md")
+            self.assertIn("Related ideas", detail)
+            self.assertIn('href="/idea?idea_id=Ideas%2Fb.md"', detail)
 
     def test_status_doctor_export_and_http_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -335,6 +621,56 @@ class SignalDeckTests(unittest.TestCase):
                 body = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(body["status"], "ok")
                 conn.close()
+
+                conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                conn.request(
+                    "POST",
+                    "/ideas",
+                    body=json.dumps({"title": "New dashboard idea", "body": "first editable note"}),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = conn.getresponse()
+                self.assertEqual(response.status, 200)
+                created = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(created["status"], "ok")
+                self.assertTrue((vault / created["path"]).exists())
+                conn.close()
+
+                update_agent_block(vault / created["path"], "Rank: 77", load_config(vault))
+                conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                conn.request(
+                    "POST",
+                    "/ideas/update",
+                    body=json.dumps(
+                        {
+                            "idea_id": created["idea_id"],
+                            "title": "Updated dashboard idea",
+                            "body": "changed note text",
+                        }
+                    ),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = conn.getresponse()
+                self.assertEqual(response.status, 200)
+                conn.close()
+                updated_note = (vault / created["path"]).read_text(encoding="utf-8")
+                self.assertIn("changed note text", updated_note)
+                self.assertIn("Rank: 77", updated_note)
+
+                html = (vault / "Signal Deck.html").read_text(encoding="utf-8")
+                self.assertIn('id="new-title"', html)
+                self.assertNotIn("Note and changes", html)
+                conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                conn.request("GET", f"/idea?idea_id={created['idea_id']}")
+                response = conn.getresponse()
+                self.assertEqual(response.status, 200)
+                detail_html = response.read().decode("utf-8")
+                conn.close()
+                self.assertIn("Notes and changes", detail_html)
+                self.assertIn('id="idea-title"', detail_html)
+                self.assertIn('id="idea-body"', detail_html)
+                self.assertIn('id="idea-summary"', detail_html)
+                self.assertIn('id="idea-notes"', detail_html)
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
@@ -393,7 +729,8 @@ class SignalDeckTests(unittest.TestCase):
                 result = run_codex_agent_test(vault, "direct")
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["discoveries"], 1)
-            self.assertIn("Codex direct result", (vault / "Signal Deck.html").read_text(encoding="utf-8"))
+            self.assertNotIn("Codex direct result", (vault / "Signal Deck.html").read_text(encoding="utf-8"))
+            self.assertIn("Codex direct result", render_idea_detail(vault, "Ideas/direct.md"))
 
 
 def subprocess_completed(returncode: int):

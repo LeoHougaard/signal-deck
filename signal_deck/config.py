@@ -61,7 +61,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "youtube_api_key_env": "YOUTUBE_API_KEY",
         "max_candidates_per_source": 8,
         "max_items_per_idea": 4,
+        "max_video_searches": 6,
+        "nightly_ideas_per_run": 12,
+        "reactive_ideas_per_run": 6,
         "min_relevance": 0.08,
+        "media_min_specificity": 0.34,
     },
     "ranking": {
         "activity_half_life_days": 10,
@@ -75,7 +79,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "source_weights": {
         "rss": 0.85,
         "arxiv": 0.95,
-        "youtube": 0.75,
+        "youtube": 1.15,
         "ollama": 0.72,
         "codex": 1.05,
         "openai": 1.0,
@@ -100,6 +104,7 @@ DEFAULT_SOURCES: dict[str, Any] = {
         "independent invention documentary",
         "human computer interaction ideas",
     ],
+    "youtube_urls": [],
     "youtube_channel_ids": [],
     "web_seeds": [],
 }
