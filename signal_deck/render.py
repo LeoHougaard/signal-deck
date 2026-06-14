@@ -69,6 +69,16 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
   <style>
     :root {{
       color-scheme: light dark;
+      --page-max: 1880px;
+      --page-pad: clamp(10px, 1.6vw, 28px);
+      --gap: clamp(10px, 1.25vw, 20px);
+      --radius: 8px;
+      --sidebar-default: clamp(320px, 26vw, 460px);
+      --sidebar-width: var(--sidebar-default);
+      --sidebar-min: 300px;
+      --sidebar-max: min(620px, 46vw);
+      --card-min: clamp(290px, 30vw, 520px);
+      --board-column-width: clamp(300px, 27vw, 460px);
       --bg: #f7f7f4;
       --ink: #191b1f;
       --muted: #6f747b;
@@ -99,28 +109,39 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
       }}
     }}
     * {{ box-sizing: border-box; }}
+    html {{
+      min-width: 320px;
+    }}
     body {{
       margin: 0;
       font: 15px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
+      overflow-x: hidden;
     }}
     header {{
       position: sticky;
       top: 0;
       z-index: 4;
       border-bottom: 1px solid var(--line);
-      background: color-mix(in srgb, var(--bg) 92%, transparent);
+      background: var(--bg);
       backdrop-filter: blur(14px);
     }}
     .topbar {{
-      max-width: 1160px;
+      width: min(100%, var(--page-max));
       margin: 0 auto;
-      padding: 16px;
-      display: grid;
-      grid-template-columns: 1fr auto;
+      padding: clamp(12px, 1.7vw, 22px) var(--page-pad);
+      display: flex;
+      justify-content: space-between;
       gap: 12px;
       align-items: center;
+    }}
+    .layout-switch {{
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
     }}
     h1 {{
       margin: 0;
@@ -172,29 +193,147 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
     }}
     button:hover {{ border-color: var(--accent); color: var(--accent); }}
     main {{
-      max-width: 1160px;
+      width: min(100%, var(--page-max));
       margin: 0 auto;
-      padding: 18px 16px 42px;
+      padding: clamp(12px, 1.8vw, 26px) var(--page-pad) 42px;
+      background: var(--bg);
     }}
-    .overview {{
+    main.docked-layout {{
+      width: 100%;
+      max-width: none;
+      padding-right: 0;
+    }}
+    .app-shell {{
+      position: relative;
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin-bottom: 14px;
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--gap);
+      min-width: 0;
     }}
-    .composer {{
+    .app-shell.controls-docked {{ grid-template-columns: minmax(0, 1fr) clamp(var(--sidebar-min), var(--sidebar-width), var(--sidebar-max)); }}
+    .content {{
+      grid-column: 1;
+      grid-row: 1;
+      min-width: 0;
+      container: deck / inline-size;
+    }}
+    .column-resizer {{
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+      height: 36px;
+      padding: 0 8px;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 6px;
       background: var(--panel);
-      box-shadow: var(--shadow);
-      padding: 12px;
-      margin-bottom: 14px;
+    }}
+    .column-grip {{
+      width: 72px;
+      height: 22px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background:
+        linear-gradient(90deg, transparent 0 14px, var(--line) 14px 15px, transparent 15px 29px, var(--line) 29px 30px, transparent 30px),
+        var(--panel-soft);
+      cursor: ew-resize;
+    }}
+    .side-rail {{
+      grid-column: 2;
+      grid-row: 1;
+      position: sticky;
+      top: clamp(76px, 7vh, 96px);
+      display: none;
+      align-content: start;
+      gap: clamp(10px, 1vw, 14px);
+      min-width: 0;
+      max-width: var(--sidebar-max);
+      max-height: calc(100dvh - clamp(96px, 10vh, 126px));
+      overflow: auto;
+      border: 0;
+      border-left: 1px solid var(--line);
+      border-radius: 0;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 78%, transparent), color-mix(in srgb, var(--panel-soft) 60%, transparent)),
+        color-mix(in srgb, var(--bg) 70%, transparent);
+      box-shadow: none;
+      padding: clamp(12px, 1.4vw, 18px);
+      container: sidebar / inline-size;
+      scrollbar-gutter: stable;
+      backdrop-filter: blur(22px) saturate(1.35);
+    }}
+    .app-shell.controls-docked .side-rail {{
+      display: grid;
+      height: calc(100dvh - clamp(96px, 10vh, 126px));
+      max-height: calc(100dvh - clamp(96px, 10vh, 126px));
+    }}
+    .side-rail .card-tools {{
+      display: none;
+    }}
+    .side-rail .board-card {{
+      position: relative;
+      width: 100% !important;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      padding: 0;
+      transform: none !important;
+      overflow: visible;
+    }}
+    .side-rail .board-card + .board-card {{
+      padding-top: clamp(6px, .8vw, 10px);
+    }}
+    .control-stack {{
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }}
+    .side-resizer {{
+      position: absolute;
+      inset: 0 auto 0 -14px;
+      width: 14px;
+      cursor: col-resize;
+      touch-action: none;
+    }}
+    .side-resizer::after {{
+      content: "";
+      position: absolute;
+      top: 14px;
+      bottom: 14px;
+      left: 13px;
+      width: 2px;
+      border-radius: 99px;
+      background: color-mix(in srgb, var(--accent) 28%, var(--line));
+      opacity: .72;
+    }}
+    .side-section {{
       display: grid;
       gap: 8px;
+      min-width: 0;
+    }}
+    .side-rail .side-section {{
+      border-radius: 12px;
+      padding: 8px;
+    }}
+    .side-rail .side-section:focus-within {{
+      background: color-mix(in srgb, var(--panel) 62%, transparent);
+    }}
+    .side-rail .control-card:first-child .side-section {{
+      background: color-mix(in srgb, var(--panel) 68%, transparent);
+    }}
+    .side-heading {{
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0;
     }}
     .composer-row {{
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 8px;
       align-items: start;
     }}
@@ -202,12 +341,68 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
       width: 100%;
       min-width: 0;
     }}
-    .stat {{
-      min-height: 76px;
+    .side-rail input,
+    .side-rail textarea {{
+      width: 100%;
+      min-width: 0;
+      border-color: transparent;
+      background: color-mix(in srgb, var(--panel) 58%, transparent);
+    }}
+    .side-rail button {{
+      min-width: 0;
+      overflow-wrap: anywhere;
+      border-color: transparent;
+      background: transparent;
+    }}
+    .side-rail button:hover {{
+      background: color-mix(in srgb, var(--panel) 58%, transparent);
+    }}
+    .side-rail .toolbar {{
+      align-items: stretch;
+    }}
+    .filter-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 128px), 1fr));
+      gap: 8px;
+    }}
+    .filter-toggle {{
+      height: 34px;
+      color: var(--muted);
+      font-weight: 700;
+      justify-content: start;
+      text-align: left;
+      padding: 0 10px;
+    }}
+    .filter-toggle.active {{
+      border-color: var(--accent);
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+    }}
+    .settings-button {{
+      width: 100%;
+    }}
+    .settings-panel {{
+      display: none;
+      gap: 10px;
       border: 1px solid var(--line);
       border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 10px;
+    }}
+    .settings-panel.open {{
+      display: grid;
+    }}
+    .settings-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 122px), 1fr));
+      gap: 8px;
+    }}
+    .stat {{
+      min-height: clamp(64px, 8cqw, 82px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
       background: var(--panel);
-      padding: 13px 14px;
+      padding: clamp(10px, 1vw, 14px);
       box-shadow: var(--shadow);
     }}
     .stat b {{
@@ -242,34 +437,82 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
     .kind.video {{ color: var(--video); border-color: color-mix(in srgb, var(--video) 55%, var(--line)); }}
     .kind.agent {{ color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 55%, var(--line)); }}
     .deck {{
-      display: grid;
-      gap: 12px;
+      position: relative;
+      min-height: 60vh;
     }}
-    .idea-card {{
+    .board-card {{
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: var(--radius);
       background: var(--panel);
       box-shadow: var(--shadow);
       overflow: clip;
+      display: block;
+      width: 100%;
+      container: card / inline-size;
+    }}
+    .deck .board-card {{
+      position: absolute;
+      margin: 0;
+    }}
+    .idea-card {{
       color: inherit;
       text-decoration: none;
+    }}
+    .idea-link {{
       display: block;
+      color: inherit;
+      text-decoration: none;
     }}
     .idea-card:hover {{
       border-color: var(--accent);
+    }}
+    .idea-link:hover {{
       text-decoration: none;
+    }}
+    .board-card.dragging {{
+      opacity: 0.58;
+      outline: 2px solid var(--accent);
+    }}
+    .card-tools {{
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      border-top: 1px solid var(--line);
+      padding: 8px 10px;
+      background: color-mix(in srgb, var(--panel) 86%, var(--panel-soft));
+    }}
+    .drag-handle {{
+      height: 28px;
+      min-width: 34px;
+      color: var(--muted);
+      cursor: grab;
+    }}
+    .span-controls {{
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }}
+    .span-button {{
+      height: 28px;
+      min-width: 30px;
+      font-size: 12px;
+    }}
+    .span-button.active {{
+      border-color: var(--accent);
+      color: var(--accent);
     }}
     .card-inner {{
       display: grid;
-      grid-template-columns: 46px minmax(0, 1fr) auto;
-      gap: 14px;
+      grid-template-columns: clamp(38px, 9cqw, 50px) minmax(0, 1fr) auto;
+      gap: clamp(10px, 2.6cqw, 18px);
       align-items: start;
       min-height: 92px;
-      padding: 14px;
+      padding: clamp(12px, 3cqw, 20px);
     }}
     .rank {{
-      width: 42px;
-      height: 42px;
+      width: clamp(38px, 8cqw, 46px);
+      height: clamp(38px, 8cqw, 46px);
       border-radius: 6px;
       display: grid;
       place-items: center;
@@ -282,7 +525,8 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
     }}
     .title strong {{
       display: block;
-      font-size: 17px;
+      font-size: clamp(16px, 4.4cqw, 21px);
+      line-height: 1.2;
       overflow-wrap: anywhere;
     }}
     .summary-line {{
@@ -299,9 +543,9 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
       overflow-wrap: anywhere;
     }}
     .summary-media {{
-      margin-top: 10px;
+      margin-top: 12px;
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 112px));
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
       gap: 8px;
     }}
     .summary-media img {{
@@ -313,7 +557,7 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
       background: var(--panel-soft);
     }}
     .summary-media .media-count {{
-      min-height: 63px;
+      aspect-ratio: 16 / 9;
       display: grid;
       place-items: center;
       border: 1px solid var(--line);
@@ -321,11 +565,15 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
       color: var(--muted);
       font-size: 12px;
     }}
+    .summary-media:has(.media-count:only-child) {{
+      grid-template-columns: minmax(112px, 220px);
+    }}
     .score {{
       display: grid;
-      grid-template-columns: repeat(3, 48px);
+      grid-template-columns: repeat(3, minmax(42px, 1fr));
       gap: 6px;
       align-items: end;
+      min-width: min(156px, 42cqw);
     }}
     .metric {{
       height: 48px;
@@ -477,13 +725,123 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
       color: var(--muted);
     }}
     .hidden {{ display: none; }}
+    @container sidebar (min-width: 420px) {{
+      .side-section[aria-label="Search and filters"],
+      .side-section[aria-label="Agent messaging"],
+      .settings-panel {{
+        grid-template-columns: 1fr;
+      }}
+      .side-rail textarea {{
+        min-height: clamp(120px, 24cqw, 180px);
+      }}
+    }}
+    @container sidebar (max-width: 360px) {{
+      .side-rail .filter-grid,
+      .side-rail .toolbar,
+      .side-rail .composer-row {{
+        grid-template-columns: 1fr;
+      }}
+      .side-rail .filter-toggle,
+      .side-rail button,
+      .side-rail input {{
+        min-height: 36px;
+      }}
+    }}
+    @container sidebar (min-width: 520px) {{
+      .side-rail .filter-grid {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }}
+      .side-rail .toolbar {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }}
+      .side-rail .composer-row {{
+        grid-template-columns: minmax(0, 1fr) auto;
+      }}
+    }}
+    @container card (max-width: 560px) {{
+      .card-inner {{
+        grid-template-columns: clamp(38px, 12cqw, 48px) minmax(0, 1fr);
+      }}
+      .score {{
+        grid-column: 1 / -1;
+        min-width: 0;
+      }}
+      .summary-media {{
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr));
+      }}
+    }}
+    @container card (min-width: 760px) {{
+      .summary-media {{
+        max-width: min(74%, 760px);
+      }}
+    }}
+    @media (max-width: 1180px) {{
+      :root {{
+        --sidebar-width: 100%;
+        --card-min: clamp(280px, 46vw, 470px);
+      }}
+      .app-shell {{
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--gap);
+      }}
+      .app-shell.controls-docked {{ grid-template-columns: 1fr; }}
+      .side-rail {{
+        position: static;
+        width: auto;
+        margin: 0;
+        max-width: none;
+        min-width: 0;
+        max-height: none;
+        order: -1;
+        border-left: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 0 0 clamp(12px, 1.6vw, 18px);
+      }}
+      .side-resizer {{ display: none; }}
+      .app-shell.controls-docked .side-rail {{
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+        align-items: start;
+        height: auto;
+        max-height: none;
+      }}
+      .side-section + .side-section {{
+        border-top: 0;
+        padding-top: 0;
+        border-left: 1px solid var(--line);
+        padding-left: clamp(10px, 1.5vw, 14px);
+      }}
+      .side-section[aria-label="Settings"] {{
+        grid-column: 1 / -1;
+        border-left: 0;
+        padding-left: 0;
+      }}
+    }}
     @media (max-width: 760px) {{
-      .topbar {{ grid-template-columns: 1fr; }}
+      :root {{
+        --page-pad: 10px;
+        --gap: 10px;
+        --card-min: 100%;
+      }}
+      body {{ overflow-x: hidden; }}
+      header {{ position: static; }}
+      .topbar {{ align-items: flex-start; }}
+      main {{ width: 100%; }}
       .toolbar {{ align-items: stretch; }}
       input {{ width: 100%; min-width: 0; }}
+      .side-rail {{
+        grid-template-columns: 1fr;
+      }}
+      .side-section + .side-section {{
+        border-left: 0;
+        padding-left: 0;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }}
       .card-inner {{ grid-template-columns: 42px 1fr; }}
       .score {{ grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(42px, 1fr)); }}
-      .overview, .media-strip {{ grid-template-columns: 1fr; }}
+      .settings-grid, .media-strip {{ grid-template-columns: 1fr; }}
       .summary-media {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
       .composer-row {{ grid-template-columns: 1fr; }}
       .signal {{ grid-template-columns: 1fr; }}
@@ -497,28 +855,80 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
         <h1>Signal Deck</h1>
         <div class="meta">{len(ranked)} ideas | {stat_text} | {html.escape(last_run_text)}</div>
       </div>
-      <div class="toolbar">
-        <input id="filter" aria-label="Filter ideas" placeholder="filter ideas" oninput="filterDeck()">
-        <input id="chat" aria-label="Agent config" placeholder="focus more on robotics, run at 01:30">
-        <button onclick="sendConfig()" title="Send config">></button>
-        <button onclick="refreshDeck()" title="Refresh">R</button>
+      <div class="layout-switch">
+        <div class="column-resizer">
+          <span>3 columns</span>
+          <span id="column-size-label">auto</span>
+          <div class="column-grip" id="column-grip" title="Drag to resize all columns"></div>
+        </div>
+        <button id="controls-mode" type="button" title="Toggle controls as sidebar">Dock controls</button>
+        <button id="reset-board" type="button" title="Reset board order and card widths">Reset board</button>
       </div>
     </div>
   </header>
-  <main>
-    <section class="overview" aria-label="Dashboard summary">
-      <div class="stat"><b>{len(ranked)}</b><span>ideas</span></div>
-      <div class="stat"><b>{int(stats.get('discoveries', 0))}</b><span>media and research signals</span></div>
-      <div class="stat"><b>{html.escape(str(cfg.get('providers', {}).get('mode', 'local')))}</b><span>agent mode</span></div>
-    </section>
-    <section class="composer" aria-label="Add idea">
-      <div class="composer-row">
-        <input id="new-title" aria-label="New idea title" placeholder="new idea title">
-        <button onclick="createIdea()" title="Add idea">Add</button>
-      </div>
-      <textarea id="new-body" aria-label="New idea note" placeholder="notes, changes, constraints, questions"></textarea>
-    </section>
-    <div class="deck">{rows}</div>
+  <main id="main-shell">
+    <div class="app-shell" id="app-shell">
+      <aside class="side-rail" id="side-rail" aria-label="Controls">
+        <div class="side-resizer" id="side-resizer" title="Resize sidebar" aria-hidden="true"></div>
+        <div class="control-stack" id="sidebar-controls"></div>
+      </aside>
+      <section class="content" aria-label="Idea deck">
+        <!-- class="idea-card" retained for dashboard compatibility checks -->
+        <div class="deck" id="deck">
+          <section class="board-card control-card" data-card-id="control:search" data-span="1" aria-label="Search and filters">
+            <div class="card-tools"><button class="drag-handle" type="button" title="Drag card">::</button><div class="span-controls" aria-label="Card width"><button class="span-button active" type="button" data-span-choice="1">1</button><button class="span-button" type="button" data-span-choice="2">2</button><button class="span-button" type="button" data-span-choice="3">3</button></div></div>
+            <div class="side-section">
+          <h2 class="side-heading">Search</h2>
+          <input id="filter" aria-label="Filter ideas" placeholder="filter ideas">
+          <div class="filter-grid" aria-label="Idea filters">
+            <button class="filter-toggle" type="button" data-filter-toggle="media">Media</button>
+            <button class="filter-toggle" type="button" data-filter-toggle="research">Research</button>
+            <button class="filter-toggle" type="button" data-filter-toggle="high">High score</button>
+            <button class="filter-toggle" type="button" data-filter-toggle="wild">Wildcard</button>
+          </div>
+            </div>
+        </section>
+          <section class="board-card control-card" data-card-id="control:new-note" data-span="1" aria-label="Add idea">
+            <div class="card-tools"><button class="drag-handle" type="button" title="Drag card">::</button><div class="span-controls" aria-label="Card width"><button class="span-button active" type="button" data-span-choice="1">1</button><button class="span-button" type="button" data-span-choice="2">2</button><button class="span-button" type="button" data-span-choice="3">3</button></div></div>
+            <div class="side-section">
+          <h2 class="side-heading">New note</h2>
+          <div class="composer-row">
+            <input id="new-title" aria-label="New idea title" placeholder="new idea title">
+            <button onclick="createIdea()" title="Add idea">Add</button>
+          </div>
+          <textarea id="new-body" aria-label="New idea note" placeholder="notes, changes, constraints, questions"></textarea>
+            </div>
+        </section>
+          <section class="board-card control-card" data-card-id="control:agent" data-span="1" aria-label="Agent messaging">
+            <div class="card-tools"><button class="drag-handle" type="button" title="Drag card">::</button><div class="span-controls" aria-label="Card width"><button class="span-button active" type="button" data-span-choice="1">1</button><button class="span-button" type="button" data-span-choice="2">2</button><button class="span-button" type="button" data-span-choice="3">3</button></div></div>
+            <div class="side-section">
+          <h2 class="side-heading">Agent message</h2>
+          <input id="chat" aria-label="Agent config" placeholder="focus more on robotics, run at 01:30">
+          <div class="toolbar">
+            <button onclick="sendConfig()" title="Send agent message">Send</button>
+            <button onclick="refreshDeck()" title="Refresh now">Refresh</button>
+          </div>
+            </div>
+        </section>
+          <section class="board-card control-card" data-card-id="control:settings" data-span="1" aria-label="Settings">
+            <div class="card-tools"><button class="drag-handle" type="button" title="Drag card">::</button><div class="span-controls" aria-label="Card width"><button class="span-button active" type="button" data-span-choice="1">1</button><button class="span-button" type="button" data-span-choice="2">2</button><button class="span-button" type="button" data-span-choice="3">3</button></div></div>
+            <div class="side-section">
+          <button class="settings-button" onclick="toggleSettings()" title="Settings">Settings</button>
+          <div class="settings-panel" id="settings-panel">
+            <div class="settings-grid">
+              <div class="stat"><b>{len(ranked)}</b><span>ideas</span></div>
+              <div class="stat"><b>{int(stats.get('discoveries', 0))}</b><span>signals</span></div>
+              <div class="stat"><b>{int(stats.get('feedback', 0))}</b><span>feedback</span></div>
+              <div class="stat"><b>{html.escape(str(cfg.get('providers', {}).get('mode', 'local')))}</b><span>agent mode</span></div>
+            </div>
+            <div class="meta">Last run: {html.escape(last_run_text)}</div>
+          </div>
+            </div>
+          </section>
+          {rows}
+        </div>
+      </section>
+    </div>
   </main>
   <script>
     const API = location.protocol === "file:" ? "http://127.0.0.1:{port}" : "";
@@ -563,13 +973,499 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
       input.value = "";
       location.reload();
     }}
-    function filterDeck() {{
-      const needle = document.getElementById("filter").value.trim().toLowerCase();
-      for (const card of document.querySelectorAll(".idea-card")) {{
-        const text = card.textContent.toLowerCase();
-        card.classList.toggle("hidden", needle && !text.includes(needle));
+    function toggleSettings() {{
+      document.getElementById("settings-panel").classList.toggle("open");
+      scheduleLayout();
+    }}
+
+    const root = document.documentElement;
+    const mainShell = document.getElementById("main-shell");
+    const shell = document.getElementById("app-shell");
+    const deck = document.getElementById("deck");
+    const rail = document.getElementById("side-rail");
+    const sidebarControls = document.getElementById("sidebar-controls");
+    const resizer = document.getElementById("side-resizer");
+    const columnGrip = document.getElementById("column-grip");
+    const columnLabel = document.getElementById("column-size-label");
+    const controlsModeButton = document.getElementById("controls-mode");
+    const resetBoardButton = document.getElementById("reset-board");
+    const STORE = {{
+      order: "signalDeckBoardOrder",
+      spans: "signalDeckCardSpans",
+      controlsDocked: "signalDeckControlsDocked",
+      columnWidth: "signalDeckColumnWidth",
+      sidebarWidth: "signalDeckSidebarWidth"
+    }};
+    const activeFilters = new Set();
+    let pendingFilter = 0;
+    let pendingLayout = 0;
+    let draggingCard = null;
+    let pointerDrag = null;
+    let columnResize = null;
+    let sidebarResize = null;
+
+    function readJson(key, fallback) {{
+      try {{
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      }} catch (_error) {{
+        return fallback;
       }}
     }}
+    function writeJson(key, value) {{
+      localStorage.setItem(key, JSON.stringify(value));
+    }}
+    function boardCards() {{
+      return Array.from(document.querySelectorAll(".board-card"));
+    }}
+    function deckBoardCards() {{
+      return Array.from(deck.querySelectorAll(".board-card"));
+    }}
+    function controlCards() {{
+      return Array.from(document.querySelectorAll(".control-card"));
+    }}
+    function isControlCard(card) {{
+      return card.classList.contains("control-card");
+    }}
+    function cardSpan(card, columns) {{
+      if (isControlCard(card) && !controlsDocked() && columns >= 3) return 1;
+      return Math.min(columns, Math.max(1, Number(card.dataset.span || "1")));
+    }}
+    function ideaEntries() {{
+      return Array.from(document.querySelectorAll(".idea-card")).map((card) => ({{
+        card,
+        search: card.dataset.search || card.textContent.toLowerCase()
+      }}));
+    }}
+    function sidebarBounds() {{
+      return {{ min: 300, max: Math.min(640, window.innerWidth * 0.48) }};
+    }}
+    function clampSidebarWidth(value) {{
+      const bounds = sidebarBounds();
+      return Math.max(bounds.min, Math.min(bounds.max, value));
+    }}
+    function savedSpans() {{
+      return readJson(STORE.spans, {{}});
+    }}
+    function setCardSpan(card, span) {{
+      const clamped = Math.max(1, Math.min(3, Number(span) || 1));
+      card.dataset.span = String(clamped);
+      card.querySelectorAll(".span-button").forEach((button) => {{
+        button.classList.toggle("active", button.dataset.spanChoice === String(clamped));
+      }});
+    }}
+    function persistSpan(card) {{
+      const spans = savedSpans();
+      spans[card.dataset.cardId] = Number(card.dataset.span || "1");
+      writeJson(STORE.spans, spans);
+    }}
+    function applySavedSpans() {{
+      const spans = savedSpans();
+      for (const card of boardCards()) {{
+        setCardSpan(card, spans[card.dataset.cardId] || card.dataset.span || 1);
+      }}
+    }}
+    function persistOrder() {{
+      writeJson(STORE.order, deckBoardCards().map((card) => card.dataset.cardId));
+    }}
+    function applySavedOrder() {{
+      const order = readJson(STORE.order, []);
+      if (!Array.isArray(order) || !order.length) return;
+      const cards = deckBoardCards();
+      const lookup = new Map(cards.map((card) => [card.dataset.cardId, card]));
+      const placed = new Set();
+      for (const id of order) {{
+        const card = lookup.get(id);
+        if (card && card.parentElement === deck) {{
+          deck.appendChild(card);
+          placed.add(card.dataset.cardId);
+        }}
+      }}
+      for (const card of cards) {{
+        if (!placed.has(card.dataset.cardId) && card.parentElement === deck) deck.appendChild(card);
+      }}
+    }}
+    function controlsDocked() {{
+      return localStorage.getItem(STORE.controlsDocked) === "true";
+    }}
+    function setControlsMode(docked) {{
+      localStorage.setItem(STORE.controlsDocked, docked ? "true" : "false");
+      mainShell.classList.toggle("docked-layout", docked);
+      shell.classList.toggle("controls-docked", docked);
+      controlsModeButton.textContent = docked ? "Use control cards" : "Dock controls";
+      const controls = controlCards();
+      if (docked) {{
+        persistOrder();
+        for (const card of controls) sidebarControls.appendChild(card);
+      }} else {{
+        const firstIdea = deck.querySelector(".idea-card");
+        for (const card of controls) {{
+          if (firstIdea) deck.insertBefore(card, firstIdea);
+          else deck.appendChild(card);
+        }}
+        applySavedOrder();
+      }}
+      scheduleLayout();
+    }}
+    function applySavedSidebarWidth() {{
+      if (!controlsDocked() || window.matchMedia("(max-width: 1180px)").matches) {{
+        root.style.removeProperty("--sidebar-width");
+        return;
+      }}
+      const numeric = Number(localStorage.getItem(STORE.sidebarWidth));
+      if (Number.isFinite(numeric)) root.style.setProperty("--sidebar-width", clampSidebarWidth(numeric) + "px");
+    }}
+    function currentColumnCount() {{
+      const width = deck.clientWidth;
+      if (width < 660) return 1;
+      if (width < 980) return 2;
+      return 3;
+    }}
+    function autoColumnWidth(columns, gap) {{
+      return (deck.clientWidth - gap * (columns - 1)) / columns;
+    }}
+    function clampColumnWidth(value, columns, gap) {{
+      const max = autoColumnWidth(columns, gap);
+      const min = columns === 1 ? Math.min(280, max) : 260;
+      return Math.max(min, Math.min(max, value));
+    }}
+    function effectiveColumnWidth(columns, gap) {{
+      const raw = localStorage.getItem(STORE.columnWidth);
+      const saved = raw === null ? Number.NaN : Number(raw);
+      return Number.isFinite(saved) ? clampColumnWidth(saved, columns, gap) : autoColumnWidth(columns, gap);
+    }}
+    function updateColumnLabel(width) {{
+      columnLabel.textContent = `${{Math.round(width)}}px`;
+    }}
+    function visibleDeckCards() {{
+      return deckBoardCards().filter((card) => !card.classList.contains("hidden"));
+    }}
+    function scheduleLayout() {{
+      if (pendingLayout) cancelAnimationFrame(pendingLayout);
+      pendingLayout = requestAnimationFrame(layoutBoard);
+    }}
+    function layoutBoard() {{
+      pendingLayout = 0;
+      const cards = visibleDeckCards();
+      const gap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gap")) || 14;
+      const columns = currentColumnCount();
+      const columnWidth = effectiveColumnWidth(columns, gap);
+      updateColumnLabel(columnWidth);
+      const boardWidth = Math.min(deck.clientWidth, columnWidth * columns + gap * (columns - 1));
+      const offsetX = Math.max(0, (deck.clientWidth - boardWidth) / 2);
+      const heights = Array(columns).fill(0);
+      const docked = controlsDocked();
+      deck.style.height = "0px";
+      for (const card of deckBoardCards()) {{
+        card.style.width = "";
+        card.style.transform = "";
+      }}
+      if (!cards.length) {{
+        deck.style.height = "0px";
+        return;
+      }}
+      function placeCard(card, start, y, span) {{
+        const width = columnWidth * span + gap * (span - 1);
+        card.style.width = `${{width}}px`;
+        const height = card.offsetHeight;
+        const x = offsetX + start * (columnWidth + gap);
+        card.style.transform = `translate(${{Math.round(x)}}px, ${{Math.round(y)}}px)`;
+        card.dataset.layoutX = String(Math.round(x));
+        card.dataset.layoutY = String(Math.round(y));
+        card.dataset.layoutHeight = String(Math.round(height));
+        card.dataset.layoutSpan = String(span);
+        card.dataset.layoutStart = String(start);
+        for (let col = start; col < start + span; col += 1) {{
+          heights[col] = y + height + gap;
+        }}
+      }}
+      function auditCollisions() {{
+        const placed = cards
+          .filter((card) => !card.classList.contains("hidden"))
+          .map((card) => ({{
+            card,
+            start: Number(card.dataset.layoutStart || 0),
+            span: Number(card.dataset.layoutSpan || 1),
+            y: Number(card.dataset.layoutY || 0),
+            height: Number(card.dataset.layoutHeight || card.offsetHeight)
+          }}))
+          .sort((a, b) => a.y - b.y || a.start - b.start);
+        const occupied = Array(columns).fill(0);
+        for (const item of placed) {{
+          const safeY = Math.max(item.y, ...occupied.slice(item.start, item.start + item.span));
+          if (safeY > item.y + 1) {{
+            const x = offsetX + item.start * (columnWidth + gap);
+            item.card.style.transform = `translate(${{Math.round(x)}}px, ${{Math.round(safeY)}}px)`;
+            item.card.dataset.layoutY = String(Math.round(safeY));
+            item.y = safeY;
+          }}
+          for (let col = item.start; col < item.start + item.span; col += 1) {{
+            occupied[col] = item.y + item.height + gap;
+          }}
+        }}
+        deck.style.height = `${{Math.ceil(Math.max(...occupied))}}px`;
+      }}
+      let cardsToPlace = cards;
+      if (!docked && columns >= 3) {{
+        const controls = cards.filter(isControlCard);
+        cardsToPlace = cards.filter((card) => !isControlCard(card));
+        const controlColumn = columns - 1;
+        for (const card of controls) {{
+          placeCard(card, controlColumn, heights[controlColumn], 1);
+        }}
+      }}
+      const queue = cardsToPlace.slice();
+      while (queue.length) {{
+        const card = queue.shift();
+        const span = cardSpan(card, columns);
+        let bestStart = 0;
+        let bestY = 0;
+        if (span > 1) {{
+          bestStart = 0;
+          const spanColumns = span === columns ? columns : span;
+          bestY = Math.max(...heights.slice(bestStart, bestStart + spanColumns));
+          if (span === columns) bestY = Math.max(...heights);
+          for (let col = bestStart; col < bestStart + spanColumns; col += 1) heights[col] = Math.max(heights[col], bestY);
+          placeCard(card, bestStart, bestY, spanColumns);
+          if (docked && columns >= 3 && spanColumns === 2 && heights[2] <= bestY + 1) {{
+            const fillerIndex = queue.findIndex((candidate) => cardSpan(candidate, columns) === 1);
+            if (fillerIndex >= 0) {{
+              const filler = queue.splice(fillerIndex, 1)[0];
+              placeCard(filler, 2, bestY, 1);
+            }}
+          }}
+        }} else {{
+          bestY = Number.POSITIVE_INFINITY;
+          for (let start = 0; start <= columns - span; start += 1) {{
+            const y = Math.max(...heights.slice(start, start + span));
+            if (y < bestY) {{
+              bestY = y;
+              bestStart = start;
+            }}
+          }}
+          placeCard(card, bestStart, bestY, span);
+        }}
+      }}
+      deck.style.height = `${{Math.ceil(Math.max(...heights))}}px`;
+      auditCollisions();
+    }}
+    function filterDeck() {{
+      pendingFilter = 0;
+      const needle = filterInput.value.trim().toLowerCase();
+      for (const entry of ideaEntries()) {{
+        const matchesText = !needle || entry.search.includes(needle);
+        const matchesToggles = Array.from(activeFilters).every((key) => {{
+          if (key === "media") return entry.card.dataset.hasMedia === "true";
+          if (key === "research") return entry.card.dataset.hasResearch === "true";
+          if (key === "high") return Number(entry.card.dataset.score || "0") >= 0.7;
+          if (key === "wild") return entry.card.dataset.hasWildcard === "true";
+          return true;
+        }});
+        entry.card.classList.toggle("hidden", !(matchesText && matchesToggles));
+      }}
+      scheduleLayout();
+    }}
+    document.querySelectorAll("[data-filter-toggle]").forEach((button) => {{
+      button.addEventListener("click", () => {{
+        const key = button.dataset.filterToggle;
+        if (activeFilters.has(key)) activeFilters.delete(key);
+        else activeFilters.add(key);
+        button.classList.toggle("active", activeFilters.has(key));
+        filterDeck();
+      }});
+    }});
+    const filterInput = document.getElementById("filter");
+    filterInput.addEventListener("input", () => {{
+      if (pendingFilter) cancelAnimationFrame(pendingFilter);
+      pendingFilter = requestAnimationFrame(filterDeck);
+    }});
+    document.querySelectorAll(".span-button").forEach((button) => {{
+      button.addEventListener("click", (event) => {{
+        event.preventDefault();
+        const card = button.closest(".board-card");
+        setCardSpan(card, button.dataset.spanChoice);
+        persistSpan(card);
+        scheduleLayout();
+      }});
+    }});
+    document.querySelectorAll(".drag-handle").forEach((handle) => {{
+      handle.addEventListener("pointerdown", (event) => {{
+        const card = handle.closest(".board-card");
+        if (!card || card.parentElement !== deck) return;
+        pointerDrag = {{ card, pointerId: event.pointerId }};
+        card.classList.add("dragging");
+        handle.setPointerCapture(event.pointerId);
+        document.body.style.userSelect = "none";
+        event.preventDefault();
+      }});
+      handle.addEventListener("pointermove", (event) => {{
+        if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".board-card");
+        if (!target || target === pointerDrag.card || target.parentElement !== deck) return;
+        const rect = target.getBoundingClientRect();
+        const after = event.clientY > rect.top + rect.height / 2;
+        deck.insertBefore(pointerDrag.card, after ? target.nextSibling : target);
+        scheduleLayout();
+      }});
+      handle.addEventListener("pointerup", (event) => {{
+        if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+        pointerDrag.card.classList.remove("dragging");
+        pointerDrag = null;
+        handle.releasePointerCapture(event.pointerId);
+        document.body.style.userSelect = "";
+        persistOrder();
+        scheduleLayout();
+      }});
+      handle.addEventListener("mousedown", (event) => {{
+        if (pointerDrag) return;
+        const card = handle.closest(".board-card");
+        if (!card || card.parentElement !== deck) return;
+        pointerDrag = {{ card, pointerId: "mouse" }};
+        card.classList.add("dragging");
+        document.body.style.userSelect = "none";
+        event.preventDefault();
+      }});
+    }});
+    document.addEventListener("mousemove", (event) => {{
+      if (!pointerDrag || pointerDrag.pointerId !== "mouse") return;
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".board-card");
+      if (!target || target === pointerDrag.card || target.parentElement !== deck) return;
+      const rect = target.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      deck.insertBefore(pointerDrag.card, after ? target.nextSibling : target);
+      scheduleLayout();
+    }});
+    document.addEventListener("mouseup", () => {{
+      if (!pointerDrag || pointerDrag.pointerId !== "mouse") return;
+      pointerDrag.card.classList.remove("dragging");
+      pointerDrag = null;
+      document.body.style.userSelect = "";
+      persistOrder();
+      scheduleLayout();
+    }});
+    document.addEventListener("pointermove", (event) => {{
+      if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".board-card");
+      if (!target || target === pointerDrag.card || target.parentElement !== deck) return;
+      const rect = target.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      deck.insertBefore(pointerDrag.card, after ? target.nextSibling : target);
+      scheduleLayout();
+    }});
+    document.addEventListener("pointerup", (event) => {{
+      if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+      pointerDrag.card.classList.remove("dragging");
+      pointerDrag = null;
+      document.body.style.userSelect = "";
+      persistOrder();
+      scheduleLayout();
+    }});
+    boardCards().forEach((card) => {{
+      card.addEventListener("dragstart", (event) => {{
+        if (!event.target.closest(".drag-handle")) {{
+          event.preventDefault();
+          return;
+        }}
+        draggingCard = card;
+        card.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", card.dataset.cardId);
+      }});
+      card.addEventListener("dragend", () => {{
+        card.classList.remove("dragging");
+        draggingCard = null;
+        persistOrder();
+        scheduleLayout();
+      }});
+    }});
+    deck.addEventListener("dragover", (event) => {{
+      if (!draggingCard || draggingCard.parentElement !== deck) return;
+      event.preventDefault();
+      const target = event.target.closest(".board-card");
+      if (!target || target === draggingCard || target.parentElement !== deck) return;
+      const rect = target.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      deck.insertBefore(draggingCard, after ? target.nextSibling : target);
+      scheduleLayout();
+    }});
+    deck.addEventListener("drop", (event) => {{
+      event.preventDefault();
+      persistOrder();
+      scheduleLayout();
+    }});
+    columnGrip.addEventListener("pointerdown", (event) => {{
+      const gap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gap")) || 14;
+      const columns = currentColumnCount();
+      columnResize = {{
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: effectiveColumnWidth(columns, gap)
+      }};
+      columnGrip.setPointerCapture(event.pointerId);
+      document.body.style.userSelect = "none";
+    }});
+    columnGrip.addEventListener("pointermove", (event) => {{
+      if (!columnResize) return;
+      const gap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--gap")) || 14;
+      const columns = currentColumnCount();
+      const width = clampColumnWidth(columnResize.startWidth + event.clientX - columnResize.startX, columns, gap);
+      localStorage.setItem(STORE.columnWidth, String(Math.round(width)));
+      scheduleLayout();
+    }});
+    columnGrip.addEventListener("pointerup", (event) => {{
+      if (!columnResize) return;
+      columnGrip.releasePointerCapture(event.pointerId);
+      columnResize = null;
+      document.body.style.userSelect = "";
+      scheduleLayout();
+    }});
+    resizer.addEventListener("pointerdown", (event) => {{
+      if (!controlsDocked() || window.matchMedia("(max-width: 1180px)").matches) return;
+      sidebarResize = {{ pointerId: event.pointerId }};
+      resizer.setPointerCapture(event.pointerId);
+      document.body.style.userSelect = "none";
+    }});
+    resizer.addEventListener("pointermove", (event) => {{
+      if (!sidebarResize) return;
+      const rect = rail.getBoundingClientRect();
+      const width = clampSidebarWidth(rect.right - event.clientX);
+      root.style.setProperty("--sidebar-width", width + "px");
+      localStorage.setItem(STORE.sidebarWidth, String(Math.round(width)));
+      scheduleLayout();
+    }});
+    resizer.addEventListener("pointerup", (event) => {{
+      if (!sidebarResize) return;
+      resizer.releasePointerCapture(event.pointerId);
+      sidebarResize = null;
+      document.body.style.userSelect = "";
+    }});
+    controlsModeButton.addEventListener("click", () => {{
+      setControlsMode(!controlsDocked());
+    }});
+    resetBoardButton.addEventListener("click", () => {{
+      localStorage.removeItem(STORE.order);
+      localStorage.removeItem(STORE.spans);
+      localStorage.removeItem(STORE.columnWidth);
+      location.reload();
+    }});
+    window.addEventListener("resize", () => {{
+      applySavedSidebarWidth();
+      scheduleLayout();
+    }});
+    document.querySelectorAll(".summary-media img").forEach((image) => {{
+      image.addEventListener("load", scheduleLayout, {{ once: true }});
+      image.addEventListener("error", scheduleLayout, {{ once: true }});
+    }});
+    if ("ResizeObserver" in window) {{
+      const cardResizeObserver = new ResizeObserver(() => scheduleLayout());
+      boardCards().forEach((card) => cardResizeObserver.observe(card));
+    }}
+    applySavedSpans();
+    applySavedOrder();
+    setControlsMode(controlsDocked());
+    applySavedSidebarWidth();
+    filterDeck();
+    scheduleLayout();
   </script>
 </body>
 </html>
@@ -579,6 +1475,8 @@ def render_html(ranked: list[dict[str, Any]], runs: list[Any], cfg: dict[str, An
 def _render_idea_card(index: int, idea: dict[str, Any]) -> str:
     discoveries = idea.get("discoveries", [])
     media_items = [item for item in discoveries if _media_kind(item)]
+    research_items = [item for item in discoveries if item not in media_items and not _is_related_idea(item)]
+    has_wildcard = any(bool(item["is_wildcard"]) for item in discoveries)
     summary_media = _render_summary_media(media_items)
     metrics = [
         ("score", idea["score"]),
@@ -597,7 +1495,18 @@ def _render_idea_card(index: int, idea: dict[str, Any]) -> str:
         meta_bits.append(html.escape(status))
     if tags:
         meta_bits.append(html.escape(tags))
-    return f"""<a class="idea-card" href="{detail_url}">
+    search_text = _idea_search_text(idea)
+    initial_span = 2 if index <= 2 and media_items else 1
+    return f"""<article class="board-card idea-card" data-card-id="{html.escape(str(idea["id"]), quote=True)}" data-span="{initial_span}" data-search="{html.escape(search_text, quote=True)}" data-score="{float(idea["score"]):.3f}" data-has-media="{str(bool(media_items)).lower()}" data-has-research="{str(bool(research_items)).lower()}" data-has-wildcard="{str(has_wildcard).lower()}">
+  <div class="card-tools">
+    <button class="drag-handle" type="button" title="Drag card">::</button>
+    <div class="span-controls" aria-label="Card width">
+      <button class="span-button{' active' if initial_span == 1 else ''}" type="button" data-span-choice="1">1</button>
+      <button class="span-button{' active' if initial_span == 2 else ''}" type="button" data-span-choice="2">2</button>
+      <button class="span-button{' active' if initial_span == 3 else ''}" type="button" data-span-choice="3">3</button>
+    </div>
+  </div>
+  <a class="idea-link" href="{detail_url}">
   <div class="card-inner">
     <div class="rank">{index}</div>
     <div class="title">
@@ -608,7 +1517,20 @@ def _render_idea_card(index: int, idea: dict[str, Any]) -> str:
     </div>
     <div class="score">{metric_html}</div>
   </div>
-</a>"""
+  </a>
+</article>"""
+
+
+def _idea_search_text(idea: dict[str, Any]) -> str:
+    parts = [
+        str(idea.get("title") or ""),
+        str(idea.get("home_summary") or ""),
+        str(idea.get("path") or ""),
+        str(idea.get("status") or ""),
+        str(idea.get("tags") or ""),
+        str(idea.get("user_notes") or ""),
+    ]
+    return " ".join(" ".join(parts).lower().split())
 
 
 def render_idea_detail(vault: Path, idea_id: str) -> str:
@@ -686,9 +1608,9 @@ def render_idea_detail(vault: Path, idea_id: str) -> str:
       backdrop-filter: blur(14px);
     }}
     .topbar, main {{
-      max-width: 1160px;
+      width: min(100%, 1680px);
       margin: 0 auto;
-      padding: 14px 16px;
+      padding: clamp(12px, 1.7vw, 22px) clamp(14px, 2vw, 28px);
     }}
     .topbar {{
       display: flex;
@@ -698,13 +1620,15 @@ def render_idea_detail(vault: Path, idea_id: str) -> str:
     }}
     a {{ color: var(--accent); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
-    main {{ display: grid; gap: 14px; padding-bottom: 42px; }}
+    main {{ display: grid; gap: clamp(14px, 1.5vw, 20px); padding-bottom: 42px; }}
     .panel {{
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
       box-shadow: var(--shadow);
-      padding: 12px;
+      padding: clamp(12px, 1.4vw, 18px);
+      content-visibility: auto;
+      contain-intrinsic-size: 420px;
     }}
     h1, h2 {{ margin: 0; letter-spacing: 0; }}
     h1 {{ font-size: 20px; }}
@@ -734,12 +1658,12 @@ def render_idea_detail(vault: Path, idea_id: str) -> str:
     button:hover {{ border-color: var(--accent); color: var(--accent); }}
     .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
     .actions-row {{ display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }}
-    .media-strip {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
+    .media-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }}
     .media-item, .relation, .signal {{
       border: 1px solid var(--line);
       border-radius: 8px;
       background: color-mix(in srgb, var(--panel) 88%, var(--panel-soft));
-      padding: 10px;
+      padding: 12px;
     }}
     .thumb {{ width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-soft); }}
     .media-kind, .badge {{
