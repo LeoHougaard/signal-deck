@@ -131,6 +131,9 @@ def _apply_source_changes(sources: dict[str, Any], text: str) -> list[str]:
             channel_id = _youtube_channel_id(clean_url)
             if channel_id and _append_unique(sources, "youtube_channel_ids", channel_id):
                 changes.append(f"youtube_channel:{channel_id}")
+        elif _youtube_video_id(clean_url):
+            if _append_unique(sources, "youtube_urls", clean_url):
+                changes.append(f"youtube_video:{clean_url}")
         elif _append_unique(sources, "web_seeds", clean_url):
             changes.append(f"web_seed:{clean_url}")
     arxiv_match = re.search(r"(?:add|use)\s+arxiv\s+(.+)", text, flags=re.I)
@@ -155,4 +158,18 @@ def _youtube_channel_id(url: str) -> str | None:
     match = re.search(r"/channel/([^/?#]+)", url)
     if match:
         return match.group(1)
+    return None
+
+
+def _youtube_video_id(url: str) -> str | None:
+    if "youtu.be/" in url:
+        match = re.search(r"youtu\.be/([^/?#]+)", url)
+        return match.group(1) if match else None
+    if "youtube.com" in url:
+        match = re.search(r"[?&]v=([^&#]+)", url)
+        if match:
+            return match.group(1)
+        match = re.search(r"/(?:shorts|embed)/([^/?#]+)", url)
+        if match:
+            return match.group(1)
     return None

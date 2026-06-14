@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS discoveries (
     score REAL NOT NULL,
     novelty REAL NOT NULL,
     is_wildcard INTEGER NOT NULL DEFAULT 0,
+    image_url TEXT NOT NULL DEFAULT '',
     citations_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -45,6 +46,31 @@ CREATE TABLE IF NOT EXISTS feedback (
     value REAL NOT NULL,
     note TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS idea_metadata (
+    idea_id TEXT PRIMARY KEY,
+    summary TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '',
+    user_notes TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS relation_notes (
+    idea_id TEXT NOT NULL,
+    related_idea_id TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (idea_id, related_idea_id)
+);
+
+CREATE TABLE IF NOT EXISTS media_notes (
+    idea_id TEXT NOT NULL,
+    discovery_id INTEGER NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (idea_id, discovery_id)
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -70,8 +96,15 @@ def connect(vault: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(state_path(vault))
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(discoveries)")}
+    if "image_url" not in columns:
+        conn.execute("ALTER TABLE discoveries ADD COLUMN image_url TEXT NOT NULL DEFAULT ''")
 
 
 def upsert_idea(conn: sqlite3.Connection, idea: Idea) -> None:
@@ -114,9 +147,9 @@ def add_discovery(conn: sqlite3.Connection, discovery: dict[str, Any]) -> int:
         """
         INSERT INTO discoveries(
             idea_id, source_type, title, url, summary, why, score, novelty,
-            is_wildcard, citations_json, created_at, updated_at
+            is_wildcard, image_url, citations_json, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(idea_id, url) DO UPDATE SET
             title=excluded.title,
             source_type=excluded.source_type,
@@ -125,6 +158,7 @@ def add_discovery(conn: sqlite3.Connection, discovery: dict[str, Any]) -> int:
             score=MAX(discoveries.score, excluded.score),
             novelty=MAX(discoveries.novelty, excluded.novelty),
             is_wildcard=excluded.is_wildcard,
+            image_url=excluded.image_url,
             citations_json=excluded.citations_json,
             updated_at=excluded.updated_at
         """,
@@ -138,6 +172,7 @@ def add_discovery(conn: sqlite3.Connection, discovery: dict[str, Any]) -> int:
             float(discovery["score"]),
             float(discovery["novelty"]),
             1 if discovery.get("is_wildcard") else 0,
+            str(discovery.get("image_url") or "")[:1000],
             citations_json,
             now,
             now,
@@ -154,6 +189,28 @@ def add_discovery(conn: sqlite3.Connection, discovery: dict[str, Any]) -> int:
 def delete_obsolete_discoveries(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM discoveries WHERE source_type='manual' AND url LIKE 'signal://idea/%'")
     conn.commit()
+
+
+def delete_discoveries_by_urls(conn: sqlite3.Connection, urls: list[str]) -> None:
+    clean_urls = [url for url in urls if url]
+    if not clean_urls:
+        return
+    placeholders = ",".join("?" for _ in clean_urls)
+    conn.execute(f"DELETE FROM discoveries WHERE url IN ({placeholders})", clean_urls)
+    conn.commit()
+
+
+def delete_discoveries_by_ids(conn: sqlite3.Connection, ids: list[int]) -> None:
+    clean_ids = [int(item) for item in ids if item]
+    if not clean_ids:
+        return
+    placeholders = ",".join("?" for _ in clean_ids)
+    conn.execute(f"DELETE FROM discoveries WHERE id IN ({placeholders})", clean_ids)
+    conn.commit()
+
+
+def discovery_urls(conn: sqlite3.Connection) -> set[str]:
+    return {str(row["url"]) for row in conn.execute("SELECT url FROM discoveries")}
 
 
 def add_feedback(
@@ -213,6 +270,107 @@ def list_discoveries(conn: sqlite3.Connection, idea_id: str | None = None) -> li
             )
         )
     return list(conn.execute("SELECT * FROM discoveries ORDER BY score DESC, updated_at DESC"))
+
+
+def get_idea(conn: sqlite3.Connection, idea_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM ideas WHERE id=?", (idea_id,)).fetchone()
+
+
+def get_idea_metadata(conn: sqlite3.Connection, idea_id: str) -> dict[str, str]:
+    row = conn.execute("SELECT * FROM idea_metadata WHERE idea_id=?", (idea_id,)).fetchone()
+    if not row:
+        return {"summary": "", "status": "", "tags": "", "user_notes": ""}
+    return {
+        "summary": str(row["summary"] or ""),
+        "status": str(row["status"] or ""),
+        "tags": str(row["tags"] or ""),
+        "user_notes": str(row["user_notes"] or ""),
+    }
+
+
+def list_idea_metadata(conn: sqlite3.Connection) -> dict[str, dict[str, str]]:
+    return {str(row["idea_id"]): get_idea_metadata(conn, str(row["idea_id"])) for row in conn.execute("SELECT idea_id FROM idea_metadata")}
+
+
+def upsert_idea_metadata(
+    conn: sqlite3.Connection,
+    idea_id: str,
+    *,
+    summary: str | None = None,
+    status: str | None = None,
+    tags: str | None = None,
+    user_notes: str | None = None,
+) -> None:
+    current = get_idea_metadata(conn, idea_id)
+    values = {
+        "summary": current["summary"] if summary is None else summary[:4000],
+        "status": current["status"] if status is None else status[:120],
+        "tags": current["tags"] if tags is None else tags[:1000],
+        "user_notes": current["user_notes"] if user_notes is None else user_notes[:12000],
+    }
+    conn.execute(
+        """
+        INSERT INTO idea_metadata(idea_id, summary, status, tags, user_notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(idea_id) DO UPDATE SET
+            summary=excluded.summary,
+            status=excluded.status,
+            tags=excluded.tags,
+            user_notes=excluded.user_notes,
+            updated_at=excluded.updated_at
+        """,
+        (idea_id, values["summary"], values["status"], values["tags"], values["user_notes"], iso_now()),
+    )
+    conn.commit()
+
+
+def relation_note_map(conn: sqlite3.Connection, idea_id: str) -> dict[str, str]:
+    rows = conn.execute("SELECT related_idea_id, note FROM relation_notes WHERE idea_id=?", (idea_id,))
+    return {str(row["related_idea_id"]): str(row["note"] or "") for row in rows}
+
+
+def upsert_relation_note(conn: sqlite3.Connection, idea_id: str, related_idea_id: str, note: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO relation_notes(idea_id, related_idea_id, note, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(idea_id, related_idea_id) DO UPDATE SET
+            note=excluded.note,
+            updated_at=excluded.updated_at
+        """,
+        (idea_id, related_idea_id, note[:4000], iso_now()),
+    )
+    conn.commit()
+
+
+def media_note_map(conn: sqlite3.Connection, idea_id: str) -> dict[int, str]:
+    rows = conn.execute("SELECT discovery_id, note FROM media_notes WHERE idea_id=?", (idea_id,))
+    return {int(row["discovery_id"]): str(row["note"] or "") for row in rows}
+
+
+def upsert_media_note(conn: sqlite3.Connection, idea_id: str, discovery_id: int, note: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO media_notes(idea_id, discovery_id, note, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(idea_id, discovery_id) DO UPDATE SET
+            note=excluded.note,
+            updated_at=excluded.updated_at
+        """,
+        (idea_id, discovery_id, note[:4000], iso_now()),
+    )
+    conn.commit()
+
+
+def list_feedback(conn: sqlite3.Connection, idea_id: str | None = None) -> list[sqlite3.Row]:
+    if idea_id:
+        return list(
+            conn.execute(
+                "SELECT * FROM feedback WHERE idea_id=? ORDER BY id DESC",
+                (idea_id,),
+            )
+        )
+    return list(conn.execute("SELECT * FROM feedback ORDER BY id DESC"))
 
 
 def feedback_totals(conn: sqlite3.Connection) -> dict[str, float]:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ensure_config_files, load_config
-from .util import relpath, sha256_text
+from .util import relpath, sha256_text, slugify
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,77 @@ def scan_ideas(vault: Path, cfg: dict | None = None) -> list[Idea]:
             )
         )
     return ideas
+
+
+def create_idea(vault: Path, title: str, body: str, cfg: dict | None = None) -> Idea:
+    cfg = cfg or load_config(vault)
+    ideas_root = vault / str(cfg.get("ideas_dir", "Ideas"))
+    ideas_root.mkdir(parents=True, exist_ok=True)
+    clean_title = title.strip() or "Untitled idea"
+    path = _unique_idea_path(ideas_root / f"{slugify(clean_title)}.md")
+    path.write_text(_format_user_note(clean_title, body), encoding="utf-8")
+    return scan_idea_path(vault, path, cfg)
+
+
+def update_idea(vault: Path, idea_id: str, title: str, body: str, cfg: dict | None = None) -> Idea:
+    cfg = cfg or load_config(vault)
+    path = (vault / idea_id).resolve()
+    ideas_root = (vault / str(cfg.get("ideas_dir", "Ideas"))).resolve()
+    try:
+        path.relative_to(ideas_root)
+    except ValueError as exc:
+        raise ValueError("Idea must be inside the configured Ideas directory.") from exc
+    if path.suffix.lower() != ".md" or not path.exists():
+        raise ValueError("Idea note not found.")
+    original = path.read_text(encoding="utf-8", errors="replace")
+    path.write_text(_format_user_note(title.strip() or path.stem, body) + _agent_block_suffix(original, cfg), encoding="utf-8")
+    return scan_idea_path(vault, path, cfg)
+
+
+def scan_idea_path(vault: Path, path: Path, cfg: dict | None = None) -> Idea:
+    cfg = cfg or load_config(vault)
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    user_text = strip_agent_blocks(raw, cfg)
+    rel = relpath(path, vault)
+    return Idea(
+        id=rel,
+        path=path,
+        rel_path=rel,
+        title=extract_title(user_text, path),
+        user_text=user_text,
+        raw_text=raw,
+        modified_at=path.stat().st_mtime,
+        body_hash=sha256_text(user_text),
+    )
+
+
+def _unique_idea_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{stem}-{index}{suffix}")
+        if not candidate.exists():
+            return candidate
+    raise ValueError("Could not create a unique idea filename.")
+
+
+def _format_user_note(title: str, body: str) -> str:
+    clean_title = " ".join((title or "Untitled idea").split())
+    clean_body = body.strip()
+    if clean_body:
+        return f"# {clean_title}\n\n{clean_body}\n"
+    return f"# {clean_title}\n"
+
+
+def _agent_block_suffix(text: str, cfg: dict) -> str:
+    start = str(cfg["agent_block"]["start"])
+    end = str(cfg["agent_block"]["end"])
+    match = re.search(rf"{re.escape(start)}.*?{re.escape(end)}", text, flags=re.DOTALL)
+    if not match:
+        return ""
+    return "\n" + match.group(0).rstrip() + "\n"
 
 
 def extract_title(text: str, path: Path) -> str:

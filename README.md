@@ -38,6 +38,7 @@ PowerShell helpers:
 ```powershell
 .\scripts\start_signal_deck.ps1 -Vault .
 .\scripts\doctor.ps1 -Vault .
+.\scripts\test_signal_deck.ps1 -Vault .
 ```
 
 ## Data Safety
@@ -118,7 +119,10 @@ The second `status` output should show `"codex"` under `stats.sources`, and the 
 
 ```powershell
 python -m unittest discover -s tests
+.\scripts\test_signal_deck.ps1 -Vault .
 ```
+
+The script runs unit tests, compile checks, `doctor`, an isolated demo-vault refresh/render, and an HTTP smoke test.
 
 ## More Docs
 
