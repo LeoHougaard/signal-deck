@@ -3,18 +3,27 @@ from __future__ import annotations
 import html
 import json
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from . import state
 from .config import load_config
+from .obsidian import media_note_rel_path
 from .scoring import rank_ideas
 from .vault import is_agent_owned_path, strip_agent_blocks
 
 
 def render_dashboards(vault: Path) -> dict[str, Path]:
     cfg = load_config(vault)
+    try:
+        from .obsidian import sync_media_notes, sync_related_idea_blocks
+
+        sync_media_notes(vault, cfg)
+        sync_related_idea_blocks(vault, cfg)
+    except sqlite3.OperationalError:
+        pass
     conn = state.connect(vault)
     try:
         idea_rows = state.list_ideas(conn)
@@ -39,7 +48,7 @@ def render_dashboards(vault: Path) -> dict[str, Path]:
         if not is_agent_owned_path(vault, path, cfg):
             raise ValueError(f"Refusing to write non-agent-owned path: {path}")
     html_path.write_text(render_html(ranked, runs, cfg, stats), encoding="utf-8")
-    md_path.write_text(render_markdown(ranked, runs), encoding="utf-8")
+    md_path.write_text(render_markdown(ranked, runs, vault, cfg), encoding="utf-8")
     return {"html": html_path, "markdown": md_path}
 
 
@@ -1543,6 +1552,7 @@ def render_idea_detail(vault: Path, idea_id: str) -> str:
         metadata = state.get_idea_metadata(conn, idea_id)
         relation_notes = state.relation_note_map(conn, idea_id)
         media_notes = state.media_note_map(conn, idea_id)
+        discovery_statuses = state.discovery_status_map(conn, idea_id)
     finally:
         conn.close()
     note_text = _note_text(vault, str(idea_path.relative_to(vault.resolve())).replace("\\", "/"), cfg)
@@ -1551,7 +1561,7 @@ def render_idea_detail(vault: Path, idea_id: str) -> str:
     media_items = [item for item in discoveries if _media_kind(item) and not _is_related_idea(item)]
     related_items = [item for item in discoveries if _is_related_idea(item)]
     research_items = [item for item in discoveries if item not in media_items and item not in related_items]
-    media = _render_detail_media(media_items, media_notes)
+    media = _render_detail_media(media_items, media_notes, discovery_statuses, vault, cfg)
     related = _render_related_ideas(idea_id, related_items, relation_notes)
     research = _render_research_items(idea_id, research_items)
     feedback_notes = _render_feedback_notes([])
@@ -1770,6 +1780,11 @@ def render_idea_detail(vault: Path, idea_id: str) -> str:
       }});
       location.reload();
     }}
+    async function mediaAction(discoveryId, action) {{
+      const note = document.getElementById("media-note-" + discoveryId)?.value || "";
+      await post("/media/action", {{ idea_id: IDEA_ID, discovery_id: discoveryId, action, note }});
+      location.reload();
+    }}
     async function feedback(ideaId, discoveryId, signal, value) {{
       await post("/feedback", {{ idea_id: ideaId, discovery_id: discoveryId, signal, value }});
       location.reload();
@@ -1783,17 +1798,34 @@ def render_idea_detail(vault: Path, idea_id: str) -> str:
 """
 
 
-def _render_detail_media(discoveries: list[Any], media_notes: dict[int, str]) -> str:
+def _render_detail_media(
+    discoveries: list[Any],
+    media_notes: dict[int, str],
+    discovery_statuses: dict[str, str],
+    vault: Path,
+    cfg: dict[str, Any],
+) -> str:
     if not discoveries:
         return '<div class="empty">No media has been attached to this idea yet.</div>'
     shown = discoveries[:6]
     count = ""
     if len(discoveries) > len(shown):
         count = f'<div class="empty">{len(discoveries) - len(shown)} more media items are attached to this idea.</div>'
-    return '<div class="media-strip">' + "\n".join(_render_detail_media_item(item, media_notes) for item in shown) + "</div>" + count
+    return (
+        '<div class="media-strip">'
+        + "\n".join(_render_detail_media_item(item, media_notes, discovery_statuses, vault, cfg) for item in shown)
+        + "</div>"
+        + count
+    )
 
 
-def _render_detail_media_item(item: Any, media_notes: dict[int, str]) -> str:
+def _render_detail_media_item(
+    item: Any,
+    media_notes: dict[int, str],
+    discovery_statuses: dict[str, str],
+    vault: Path,
+    cfg: dict[str, Any],
+) -> str:
     discovery_id = int(item["id"])
     kind = _media_kind(item) or "media"
     title = html.escape(str(item["title"]))
@@ -1801,13 +1833,23 @@ def _render_detail_media_item(item: Any, media_notes: dict[int, str]) -> str:
     link = _render_link(str(item["url"]), title)
     image = _render_thumbnail(item)
     note = html.escape(media_notes.get(discovery_id, ""))
+    media_note = html.escape(media_note_rel_path(vault, item, cfg))
+    media_note_link = f'<a class="badge" href="{media_note}">Obsidian note</a>'
+    status = discovery_statuses.get(str(item["url"]), "")
+    status_badge = f'<span class="badge">{html.escape(status)}</span>' if status else ""
     return f"""<article class="media-item">
   {image}
   <h3>{link}</h3>
   <p>{summary}</p>
-  <span class="media-kind">{html.escape(kind)}</span>
+  <div class="badges"><span class="media-kind">{html.escape(kind)}</span>{media_note_link}{status_badge}</div>
   <label>Media note<textarea id="media-note-{discovery_id}">{note}</textarea></label>
-  <div class="actions-row"><button onclick="saveMediaNote({discovery_id})" title="Save media note">Save</button></div>
+  <div class="actions-row">
+    <button onclick="mediaAction({discovery_id}, 'attached')" title="Attach media link to this idea">Attach</button>
+    <button onclick="mediaAction({discovery_id}, 'good')" title="Good result">Good</button>
+    <button onclick="mediaAction({discovery_id}, 'bad')" title="Bad result and hide">Bad</button>
+    <button onclick="mediaAction({discovery_id}, 'used')" title="Mark used and hide">Used</button>
+    <button onclick="saveMediaNote({discovery_id})" title="Save media note">Save</button>
+  </div>
 </article>"""
 
 
@@ -2101,7 +2143,7 @@ def _idea_detail_href(idea_id: str) -> str:
     return f"/idea?idea_id={quote(idea_id, safe='')}"
 
 
-def render_markdown(ranked: list[dict[str, Any]], runs: list[Any]) -> str:
+def render_markdown(ranked: list[dict[str, Any]], runs: list[Any], vault: Path | None = None, cfg: dict[str, Any] | None = None) -> str:
     lines = ["# Signal Deck", ""]
     if runs:
         run = runs[0]
@@ -2118,7 +2160,7 @@ def render_markdown(ranked: list[dict[str, Any]], runs: list[Any]) -> str:
         if summary:
             lines.append(summary)
             lines.append("")
-        lines.append(f"[Full note]({idea['path']})")
+        lines.append(f"Path: `{idea['path']}`")
         media = [item for item in idea.get("discoveries", []) if _media_kind(item)]
         if media:
             lines.append("")
@@ -2127,8 +2169,8 @@ def render_markdown(ranked: list[dict[str, Any]], runs: list[Any]) -> str:
                 title = str(item["title"])
                 url = str(item["url"])
                 kind = _media_kind(item)
-                link = f"[{title}]({url})" if url.startswith("http") or url.startswith("Ideas/") or url.endswith(".md") else title
-                lines.append(f"- {link} `{kind}`")
+                note = f" media note: `{media_note_rel_path(vault, item, cfg)}`" if vault is not None else ""
+                lines.append(f"- {title} `{kind}`{note}")
         research = [item for item in idea.get("discoveries", []) if item not in media]
         if research:
             lines.append("")
@@ -2138,7 +2180,7 @@ def render_markdown(ranked: list[dict[str, Any]], runs: list[Any]) -> str:
             url = str(item["url"])
             source = str(item["source_type"])
             score = int(float(item["score"]) * 100)
-            link = f"[{title}]({url})" if url.startswith("http") or url.startswith("Ideas/") or url.endswith(".md") else title
-            lines.append(f"- {link} `{source}` `{score}`")
+            target = f" `{url}`" if url else ""
+            lines.append(f"- {title}{target} `{source}` `{score}`")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

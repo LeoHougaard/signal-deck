@@ -5,5 +5,11 @@ __pycache__/
 .ruff_cache/
 .signal/
 Ideas/
+Media/
 Signal Deck.html
 Signal Deck.md
+signal_deck_*.png
+.obsidian/appearance.json
+.obsidian/core-plugins.json
+.obsidian/graph.json
+.obsidian/workspace.json

@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS media_notes (
     PRIMARY KEY (idea_id, discovery_id)
 );
 
+CREATE TABLE IF NOT EXISTS discovery_status (
+    idea_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    discovery_id INTEGER,
+    status TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (idea_id, url)
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL,
@@ -261,15 +271,27 @@ def list_ideas(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(conn.execute("SELECT * FROM ideas ORDER BY modified_at DESC"))
 
 
-def list_discoveries(conn: sqlite3.Connection, idea_id: str | None = None) -> list[sqlite3.Row]:
+def list_discoveries(conn: sqlite3.Connection, idea_id: str | None = None, include_hidden: bool = False) -> list[sqlite3.Row]:
+    hidden_clause = (
+        ""
+        if include_hidden
+        else """
+        AND NOT EXISTS (
+            SELECT 1 FROM discovery_status s
+            WHERE s.idea_id=discoveries.idea_id
+              AND s.url=discoveries.url
+              AND s.status IN ('bad', 'used')
+        )
+        """
+    )
     if idea_id:
         return list(
             conn.execute(
-                "SELECT * FROM discoveries WHERE idea_id=? ORDER BY score DESC, updated_at DESC",
+                f"SELECT * FROM discoveries WHERE idea_id=? {hidden_clause} ORDER BY score DESC, updated_at DESC",
                 (idea_id,),
             )
         )
-    return list(conn.execute("SELECT * FROM discoveries ORDER BY score DESC, updated_at DESC"))
+    return list(conn.execute(f"SELECT * FROM discoveries WHERE 1=1 {hidden_clause} ORDER BY score DESC, updated_at DESC"))
 
 
 def get_idea(conn: sqlite3.Connection, idea_id: str) -> sqlite3.Row | None:
@@ -360,6 +382,50 @@ def upsert_media_note(conn: sqlite3.Connection, idea_id: str, discovery_id: int,
         (idea_id, discovery_id, note[:4000], iso_now()),
     )
     conn.commit()
+
+
+def set_discovery_status(
+    conn: sqlite3.Connection,
+    idea_id: str,
+    discovery_id: int,
+    status: str,
+    note: str = "",
+) -> None:
+    row = conn.execute("SELECT url FROM discoveries WHERE id=? AND idea_id=?", (discovery_id, idea_id)).fetchone()
+    if not row:
+        raise ValueError("Discovery not found for idea.")
+    clean_status = status.strip().lower()
+    if clean_status not in {"good", "bad", "used", "attached"}:
+        raise ValueError("Unsupported discovery status.")
+    conn.execute(
+        """
+        INSERT INTO discovery_status(idea_id, url, discovery_id, status, note, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(idea_id, url) DO UPDATE SET
+            discovery_id=excluded.discovery_id,
+            status=excluded.status,
+            note=excluded.note,
+            updated_at=excluded.updated_at
+        """,
+        (idea_id, str(row["url"]), discovery_id, clean_status, note[:1000], iso_now()),
+    )
+    conn.commit()
+
+
+def suppressed_discovery_urls(conn: sqlite3.Connection, idea_id: str | None = None) -> set[tuple[str, str]]:
+    if idea_id:
+        rows = conn.execute(
+            "SELECT idea_id, url FROM discovery_status WHERE idea_id=? AND status IN ('bad', 'used')",
+            (idea_id,),
+        )
+    else:
+        rows = conn.execute("SELECT idea_id, url FROM discovery_status WHERE status IN ('bad', 'used')")
+    return {(str(row["idea_id"]), str(row["url"])) for row in rows}
+
+
+def discovery_status_map(conn: sqlite3.Connection, idea_id: str) -> dict[str, str]:
+    rows = conn.execute("SELECT url, status FROM discovery_status WHERE idea_id=?", (idea_id,))
+    return {str(row["url"]): str(row["status"]) for row in rows}
 
 
 def list_feedback(conn: sqlite3.Connection, idea_id: str | None = None) -> list[sqlite3.Row]:

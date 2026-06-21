@@ -6,6 +6,7 @@ It scans `Ideas/*.md`, keeps your idea text untouched, researches useful signals
 
 - `Signal Deck.html` - scrollable local dashboard with feedback buttons
 - `Signal Deck.md` - Obsidian-native index
+- `Media/*.md` - generated Obsidian media notes linked to matching ideas
 - `.signal/*` - config, feedback, state, and agent data
 
 ## Quick Start
@@ -48,9 +49,12 @@ Signal Deck treats your idea notes as source material. It may write only:
 - `.signal/*`
 - `Signal Deck.html`
 - `Signal Deck.md`
+- generated media notes in `Media/`
 - content inside `<!-- signal-agent:start -->` / `<!-- signal-agent:end -->` blocks
 
 The app never deletes or rewrites user idea text.
+Media notes are regenerated from discoveries, but the `## Personal notes` section in each media note is preserved.
+Related idea links are written only inside protected `signal-agent` blocks, so Obsidian graph view connects ideas without making `Signal Deck.md` the hub.
 
 ## Optional Providers
 
@@ -103,7 +107,14 @@ Local mode works immediately by connecting related ideas to each other. Codex, O
 - `+`: more like this
 - `-`: less like this
 - `S`: this sparked something
+- media detail actions:
+  - `Attach`: keep this media connected to the idea note
+  - `Good`: mark as a good result
+  - `Bad`: mark as bad and hide it from active results
+  - `Used`: mark as used and hide it from active results
 - chat box: natural-language config, for example `focus more on walking robots and run at 01:30`
+
+Research runs target `research.media_items_per_idea` media items per idea, defaulting to 2, so media is spread across the vault instead of piling onto a few high-scoring notes.
 
 ## Proving The Agent Is Working
 
@@ -128,3 +139,4 @@ The script runs unit tests, compile checks, `doctor`, an isolated demo-vault ref
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Safety contract](docs/SAFETY.md)
+- [Obsidian workflow](docs/OBSIDIAN_WORKFLOW.md)

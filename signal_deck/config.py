@@ -10,6 +10,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ideas_dir": "Ideas",
     "dashboard_html": "Signal Deck.html",
     "dashboard_md": "Signal Deck.md",
+    "obsidian": {
+        "media_notes": True,
+        "media_dir": "Media",
+        "related_idea_blocks": True,
+    },
     "agent_block": {
         "start": "<!-- signal-agent:start -->",
         "end": "<!-- signal-agent:end -->",
@@ -61,6 +66,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "youtube_api_key_env": "YOUTUBE_API_KEY",
         "max_candidates_per_source": 8,
         "max_items_per_idea": 4,
+        "media_items_per_idea": 2,
         "max_video_searches": 6,
         "nightly_ideas_per_run": 12,
         "reactive_ideas_per_run": 6,

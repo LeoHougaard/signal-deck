@@ -184,6 +184,12 @@ def is_agent_owned_path(vault: Path, path: Path, cfg: dict) -> bool:
         return False
     if rel.startswith(".signal/") or rel == ".signal":
         return True
+    media_dir = str(cfg.get("obsidian", {}).get("media_dir", "Media")).strip().strip("/\\")
+    ideas_dir = str(cfg.get("ideas_dir", "Ideas")).strip().strip("/\\")
+    if media_dir and media_dir != ideas_dir and not media_dir.startswith(f"{ideas_dir}/") and (
+        rel == media_dir or rel.startswith(f"{media_dir}/")
+    ):
+        return True
     return rel in {
         str(cfg.get("dashboard_html", "Signal Deck.html")),
         str(cfg.get("dashboard_md", "Signal Deck.md")),

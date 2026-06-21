@@ -69,6 +69,8 @@ class SignalDeckHandler(BaseHTTPRequestHandler):
                 self._handle_idea_note(payload)
             elif parsed.path == "/ideas/relation-note":
                 self._handle_relation_note(payload)
+            elif parsed.path == "/media/action":
+                self._handle_media_action(payload)
             elif parsed.path == "/chat-config":
                 result = apply_chat_config(self.server.vault, str(payload.get("text") or ""))
                 if result.get("should_refresh"):
@@ -171,6 +173,28 @@ class SignalDeckHandler(BaseHTTPRequestHandler):
             from .state import upsert_relation_note
 
             upsert_relation_note(conn, idea_id, related_idea_id, str(payload.get("note") or ""))
+        finally:
+            conn.close()
+        render_dashboards(self.server.vault)
+        self._send_json({"status": "ok"})
+
+    def _handle_media_action(self, payload: dict[str, Any]) -> None:
+        idea_id = str(payload.get("idea_id") or "").strip()
+        discovery_id = int(payload.get("discovery_id") or 0)
+        action = str(payload.get("action") or "").strip().lower()
+        note = str(payload.get("note") or "")
+        if not idea_id or not discovery_id:
+            raise ValueError("Missing idea_id or discovery_id")
+        self._validate_idea_id(idea_id)
+        values = {"good": 2.0, "bad": -2.0, "used": 1.0, "attached": 3.0}
+        if action not in values:
+            raise ValueError("Unsupported media action")
+        conn = connect(self.server.vault)
+        try:
+            from .state import set_discovery_status
+
+            add_feedback(conn, self.server.vault, idea_id, discovery_id, action, values[action], note)
+            set_discovery_status(conn, idea_id, discovery_id, action, note)
         finally:
             conn.close()
         render_dashboards(self.server.vault)
