@@ -42,6 +42,7 @@ from signal_deck.state import (
     record_run_finish,
     record_run_start,
     upsert_idea,
+    upsert_media_note,
 )
 from signal_deck.util import now_utc
 from signal_deck.vault import ensure_vault, scan_ideas, update_agent_block
@@ -155,7 +156,117 @@ class SignalDeckTests(unittest.TestCase):
             detail = render_idea_detail(vault, idea.id).lower()
             self.assertIn("helix robot build", detail)
             self.assertIn("media found for this idea", detail)
+            self.assertIn("obsidian note", detail)
             self.assertNotIn("transcript", html)
+
+    def test_render_creates_obsidian_media_note_with_idea_backlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            note = vault / "Ideas" / "video.md"
+            original = "# Walking robot\n\nrotating helix walking robot\n"
+            note.write_text(original, encoding="utf-8")
+            conn = connect(vault)
+            try:
+                idea = scan_ideas(vault)[0]
+                upsert_idea(conn, idea)
+                discovery_id = add_discovery(
+                    conn,
+                    {
+                        "idea_id": idea.id,
+                        "source_type": "youtube",
+                        "title": "Helix robot build",
+                        "url": "https://www.youtube.com/watch?v=helix",
+                        "summary": "Metadata summary. Channel: Lab",
+                        "why": "Matches walking robot.",
+                        "score": 0.8,
+                        "novelty": 0.7,
+                        "image_url": "https://img.youtube.com/vi/helix/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+                upsert_media_note(conn, idea.id, discovery_id, "Watch the foot contact pattern again.")
+            finally:
+                conn.close()
+
+            paths = render_dashboards(vault)
+            media_notes = list((vault / "Media").glob("signal-*.md"))
+            self.assertEqual(len(media_notes), 1)
+            media_text = media_notes[0].read_text(encoding="utf-8")
+            self.assertIn("type: signal-media", media_text)
+            self.assertIn("[[Ideas/video|Walking robot]]", media_text)
+            self.assertIn("https://www.youtube.com/watch?v=helix", media_text)
+            self.assertIn("Watch the foot contact pattern again.", media_text)
+            self.assertEqual(note.read_text(encoding="utf-8"), original)
+            deck_md = paths["markdown"].read_text(encoding="utf-8")
+            self.assertIn("media note: `Media/signal-", deck_md)
+            self.assertNotIn("[[Media/signal-", deck_md)
+
+    def test_obsidian_media_note_regeneration_preserves_personal_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "video.md").write_text("# Walking robot\n\nhelix robot\n", encoding="utf-8")
+            conn = connect(vault)
+            try:
+                idea = scan_ideas(vault)[0]
+                upsert_idea(conn, idea)
+                add_discovery(
+                    conn,
+                    {
+                        "idea_id": idea.id,
+                        "source_type": "youtube",
+                        "title": "Helix robot build",
+                        "url": "https://www.youtube.com/watch?v=helix",
+                        "summary": "Metadata summary.",
+                        "why": "Matches walking robot.",
+                        "score": 0.8,
+                        "novelty": 0.7,
+                        "image_url": "https://img.youtube.com/vi/helix/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+            finally:
+                conn.close()
+            render_dashboards(vault)
+            media_note = next((vault / "Media").glob("signal-*.md"))
+            media_note.write_text(media_note.read_text(encoding="utf-8") + "\nHand-written Obsidian note.\n", encoding="utf-8")
+            render_dashboards(vault)
+            regenerated = media_note.read_text(encoding="utf-8")
+            self.assertIn("Hand-written Obsidian note.", regenerated)
+            self.assertEqual(len(list((vault / "Media").glob("signal-*.md"))), 1)
+
+    def test_obsidian_media_notes_cannot_be_generated_inside_ideas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            cfg = load_config(vault)
+            cfg["obsidian"]["media_dir"] = "Ideas/Media"
+            save_config(vault, cfg)
+            (vault / "Ideas" / "video.md").write_text("# Walking robot\n\nhelix robot\n", encoding="utf-8")
+            conn = connect(vault)
+            try:
+                idea = scan_ideas(vault)[0]
+                upsert_idea(conn, idea)
+                add_discovery(
+                    conn,
+                    {
+                        "idea_id": idea.id,
+                        "source_type": "youtube",
+                        "title": "Helix robot build",
+                        "url": "https://www.youtube.com/watch?v=helix",
+                        "summary": "Metadata summary.",
+                        "why": "Matches walking robot.",
+                        "score": 0.8,
+                        "novelty": 0.7,
+                        "image_url": "https://img.youtube.com/vi/helix/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+            finally:
+                conn.close()
+            with self.assertRaises(ValueError):
+                render_dashboards(vault)
 
     def test_idea_first_dashboard_and_detail_media_isolation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -331,6 +442,153 @@ class SignalDeckTests(unittest.TestCase):
                 self.assertEqual(discoveries[0]["title"], specific.title)
             finally:
                 conn.close()
+
+    def test_media_items_per_idea_caps_visual_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "media-cap.md").write_text(
+                "# Hydrofoil latch\n\ncambered hydrofoil latch sailing linkage prototype\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(vault)
+            cfg["research"]["media_items_per_idea"] = 1
+            cfg["research"]["max_items_per_idea"] = 4
+            save_config(vault, cfg)
+            idea = scan_ideas(vault)[0]
+            conn = connect(vault)
+            try:
+                upsert_idea(conn, idea)
+                candidates = [
+                    Candidate(
+                        "youtube",
+                        "Cambered hydrofoil latch sailing linkage prototype alpha",
+                        "https://www.youtube.com/watch?v=cap1",
+                        "cambered hydrofoil latch sailing linkage prototype",
+                        image_url="https://img.youtube.com/vi/cap1/hqdefault.jpg",
+                    ),
+                    Candidate(
+                        "youtube",
+                        "Cambered hydrofoil latch sailing linkage prototype beta",
+                        "https://www.youtube.com/watch?v=cap2",
+                        "cambered hydrofoil latch sailing linkage prototype",
+                        image_url="https://img.youtube.com/vi/cap2/hqdefault.jpg",
+                    ),
+                    Candidate(
+                        "ollama",
+                        "Hydrofoil latch control note",
+                        "signal://ollama/control",
+                        "hydrofoil latch control note",
+                        source_id=f"ollama:{idea.id}",
+                    ),
+                ]
+                inserted = attach_candidates(conn, cfg, [idea], candidates)
+                self.assertEqual(inserted, 2)
+                rows = list_discoveries(conn, idea.id)
+                media_rows = [row for row in rows if row["source_type"] == "youtube"]
+                self.assertEqual(len(media_rows), 1)
+                added_later = attach_candidates(
+                    conn,
+                    cfg,
+                    [idea],
+                    [
+                        Candidate(
+                            "youtube",
+                            "Cambered hydrofoil latch sailing linkage prototype gamma",
+                            "https://www.youtube.com/watch?v=cap3",
+                            "cambered hydrofoil latch sailing linkage prototype",
+                            image_url="https://img.youtube.com/vi/cap3/hqdefault.jpg",
+                        ),
+                        Candidate(
+                            "ollama",
+                            "Hydrofoil latch later note",
+                            "signal://ollama/later",
+                            "hydrofoil latch later note",
+                            source_id=f"ollama:{idea.id}",
+                        ),
+                    ],
+                )
+                self.assertEqual(added_later, 1)
+                rows = list_discoveries(conn, idea.id)
+                media_rows = [row for row in rows if row["source_type"] == "youtube"]
+                self.assertEqual(len(media_rows), 1)
+            finally:
+                conn.close()
+
+    def test_media_action_hides_used_and_attaches_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "media.md").write_text("# Walking robot\n\nwalking robot linkage\n", encoding="utf-8")
+            idea = scan_ideas(vault)[0]
+            conn = connect(vault)
+            try:
+                upsert_idea(conn, idea)
+                used_id = add_discovery(
+                    conn,
+                    {
+                        "idea_id": idea.id,
+                        "source_type": "youtube",
+                        "title": "Used walking robot video",
+                        "url": "https://www.youtube.com/watch?v=used",
+                        "summary": "walking robot linkage",
+                        "why": "matches",
+                        "score": 0.9,
+                        "novelty": 0.6,
+                        "image_url": "https://img.youtube.com/vi/used/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+                attached_id = add_discovery(
+                    conn,
+                    {
+                        "idea_id": idea.id,
+                        "source_type": "youtube",
+                        "title": "Attached walking robot video",
+                        "url": "https://www.youtube.com/watch?v=attached",
+                        "summary": "walking robot linkage",
+                        "why": "matches",
+                        "score": 0.8,
+                        "novelty": 0.6,
+                        "image_url": "https://img.youtube.com/vi/attached/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+            finally:
+                conn.close()
+
+            server = SignalDeckServer(("127.0.0.1", 0), vault)
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                for discovery_id, action in [(used_id, "used"), (attached_id, "attached")]:
+                    conn_http = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                    conn_http.request(
+                        "POST",
+                        "/media/action",
+                        body=json.dumps({"idea_id": idea.id, "discovery_id": discovery_id, "action": action}),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = conn_http.getresponse()
+                    self.assertEqual(response.status, 200)
+                    conn_http.close()
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                server.server_close()
+
+            conn = connect(vault)
+            try:
+                visible_titles = {str(row["title"]) for row in list_discoveries(conn, idea.id)}
+                all_titles = {str(row["title"]) for row in list_discoveries(conn, idea.id, include_hidden=True)}
+                self.assertNotIn("Used walking robot video", visible_titles)
+                self.assertIn("Used walking robot video", all_titles)
+            finally:
+                conn.close()
+            render_dashboards(vault)
+            note_text = (vault / "Ideas" / "media.md").read_text(encoding="utf-8")
+            self.assertIn("## Attached media", note_text)
+            self.assertIn("Attached walking robot video", note_text)
 
     def test_nightly_video_research_is_scoped_to_each_idea(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -594,6 +852,14 @@ class SignalDeckTests(unittest.TestCase):
             detail = render_idea_detail(vault, "Ideas/a.md")
             self.assertIn("Related ideas", detail)
             self.assertIn('href="/idea?idea_id=Ideas%2Fb.md"', detail)
+            signal_deck_md = (vault / "Signal Deck.md").read_text(encoding="utf-8")
+            self.assertNotIn("[Full note](Ideas/a.md)", signal_deck_md)
+            self.assertNotIn("[Related idea: Rib actuator](Ideas/b.md)", signal_deck_md)
+            a_note = (vault / "Ideas" / "a.md").read_text(encoding="utf-8")
+            b_note = (vault / "Ideas" / "b.md").read_text(encoding="utf-8")
+            self.assertIn("[[Ideas/b|Rib actuator]]", a_note)
+            self.assertIn("[[Ideas/a|Pneumatic robot]]", b_note)
+            self.assertIn("<!-- signal-agent:start -->", a_note)
 
     def test_status_doctor_export_and_http_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

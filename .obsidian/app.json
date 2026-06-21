@@ -1,0 +1,22 @@
+{
+  "userIgnoreFilters": [
+    ".git/",
+    ".signal/",
+    ".gitignore",
+    ".pytest_cache/",
+    "__pycache__/",
+    "docs/",
+    "scripts/",
+    "signal_deck/",
+    "tests/",
+    "pyproject.toml",
+    "*.html",
+    "*.png",
+    "*.py",
+    "*.pyc"
+  ],
+  "showInlineTitle": true,
+  "alwaysUpdateLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "Ideas"
+}

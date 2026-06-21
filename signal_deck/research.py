@@ -18,6 +18,7 @@ from typing import Any
 from . import state
 from .config import signal_dir, load_config, load_sources
 from .render import render_dashboards
+from .obsidian import sync_media_notes, sync_related_idea_blocks
 from .scoring import discovery_score
 from .util import iso_now, sha256_text, stable_float, strip_html
 from .vault import Idea, ensure_vault, scan_ideas
@@ -63,6 +64,8 @@ def run_refresh(vault: Path, kind: str = "manual", idea_filter: str | None = Non
         state.delete_obsolete_discoveries(conn)
         _prune_generic_media(conn, cfg, ideas)
         inserted = attach_candidates(conn, cfg, ideas, candidates)
+        sync_media_notes(vault, cfg)
+        sync_related_idea_blocks(vault, cfg)
         message = f"{len(ideas)} ideas scanned, {inserted} discoveries updated"
         state.record_run_finish(conn, run_id, "ok", message)
         render_dashboards(vault)
@@ -99,6 +102,8 @@ def run_codex_agent_test(vault: Path, idea_filter: str | None = None) -> dict[st
         idea = sorted(ideas, key=lambda item: item.modified_at, reverse=True)[0]
         candidates = fetch_codex_agent_research(vault, cfg, idea)
         inserted = attach_candidates(conn, cfg, [idea], candidates)
+        sync_media_notes(vault, cfg)
+        sync_related_idea_blocks(vault, cfg)
         message = f"Codex agent tested on {idea.title}: {inserted} discoveries updated"
         state.record_run_finish(conn, run_id, "ok", message)
         render_dashboards(vault)
@@ -246,12 +251,17 @@ def attach_candidates(
     focus_terms = [str(term) for term in cfg.get("focus_terms", []) or []]
     min_relevance = float(research_cfg.get("min_relevance", 0.08))
     max_items = int(research_cfg.get("max_items_per_idea", 4))
+    max_media = int(research_cfg.get("media_items_per_idea", 2))
     wildcard_rate = float(cfg.get("ranking", {}).get("wildcard_rate", 0.12))
+    suppressed = state.suppressed_discovery_urls(conn)
     inserted = 0
     for idea in ideas:
         scored: list[tuple[float, float, str, Candidate, bool]] = []
         for candidate in candidates:
             if candidate.source_id == idea.id:
+                continue
+            candidate_url = candidate.url or f"signal://{sha256_text(candidate.title + candidate.summary)[:16]}"
+            if (idea.id, candidate_url) in suppressed:
                 continue
             score, novelty, why = discovery_score(idea.user_text, candidate, source_weights, focus_terms)
             direct_agent = candidate.source_id in {f"codex:{idea.id}", f"ollama:{idea.id}"}
@@ -274,7 +284,19 @@ def attach_candidates(
             if direct_agent or visual_media or score >= min_relevance or (wildcard and not visual_media):
                 scored.append((score, novelty, why, candidate, wildcard and score < min_relevance))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        for score, novelty, why, candidate, wildcard in scored[:max_items]:
+        selected: list[tuple[float, float, str, Candidate, bool]] = []
+        media_selected = _visible_media_count(conn, idea.id)
+        for item in scored:
+            _score, _novelty, _why, candidate, _wildcard = item
+            is_media = _candidate_is_media(candidate)
+            if is_media and media_selected >= max_media:
+                continue
+            if is_media:
+                media_selected += 1
+            selected.append(item)
+            if len(selected) >= max_items:
+                break
+        for score, novelty, why, candidate, wildcard in selected:
             url = candidate.url or f"signal://{sha256_text(candidate.title + candidate.summary)[:16]}"
             discovery = {
                 "idea_id": idea.id,
@@ -292,6 +314,26 @@ def attach_candidates(
             state.add_discovery(conn, discovery)
             inserted += 1
     return inserted
+
+
+def _visible_media_count(conn: sqlite3.Connection, idea_id: str) -> int:
+    return sum(1 for row in state.list_discoveries(conn, idea_id) if _discovery_is_visual_media(row))
+
+
+def _candidate_is_media(candidate: Candidate) -> bool:
+    source = candidate.source_type.lower()
+    url = candidate.url.lower()
+    title = candidate.title.lower()
+    return (
+        source == "youtube"
+        or "youtube.com/watch" in url
+        or "youtu.be/" in url
+        or bool(candidate.image_url)
+        or source == "arxiv"
+        or "arxiv.org" in url
+        or url.endswith(".pdf")
+        or "paper" in title
+    )
 
 
 def collect_local_idea_candidates(ideas: list[Idea]) -> list[Candidate]:
