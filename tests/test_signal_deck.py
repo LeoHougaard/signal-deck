@@ -16,6 +16,8 @@ from signal_deck.chat_config import apply_chat_config
 from signal_deck.config import load_config, load_sources, save_config
 from signal_deck.diagnostics import doctor, export_json, status
 from signal_deck.importer import import_markdown_zip
+from signal_deck.inbox import process_inbox
+from signal_deck.obsidian import compact_media_title
 from signal_deck.render import render_dashboards, render_idea_detail
 from signal_deck.research import (
     Candidate,
@@ -44,7 +46,7 @@ from signal_deck.state import (
     upsert_idea,
     upsert_media_note,
 )
-from signal_deck.util import now_utc
+from signal_deck.util import now_utc, sha256_text
 from signal_deck.vault import ensure_vault, scan_ideas, update_agent_block
 
 
@@ -99,6 +101,73 @@ class SignalDeckTests(unittest.TestCase):
             ideas = scan_ideas(vault)
             self.assertEqual({idea.title for idea in ideas}, {"Alpha robot", "Beta gearbox"})
             self.assertIn("Relations", imported[1].read_text(encoding="utf-8"))
+
+    def test_import_zip_uses_meaningful_relation_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            zip_path = Path(tmp) / "ideas.zip"
+            markdown = (
+                "### Ideas\n\n"
+                "12. Singular pneumatic joint high angle\n    - base idea\n"
+                "44. relate 12\n    - Nano tape track\n"
+                "    - Walking with feet that unstep curling out from center\n"
+                "    - Related: 12\n"
+            )
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("Idea note.md", markdown)
+            import_markdown_zip(zip_path, vault)
+            ideas = scan_ideas(vault)
+            self.assertIn("Nano tape track", {idea.title for idea in ideas})
+            self.assertFalse(any(idea.title.lower().startswith("relate ") for idea in ideas))
+
+    def test_process_inbox_imports_simple_note_and_preserves_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            inbox = vault / "Idea Inbox" / "quick.md"
+            inbox.write_text("pneumatic cam walking robot\n\nrough sketch note stays intact", encoding="utf-8")
+            result = process_inbox(vault)
+            self.assertEqual(result["processed"], 1)
+            self.assertFalse(inbox.exists())
+            self.assertTrue((vault / "Idea Inbox" / "Processed").exists())
+            ideas = sorted((vault / "Ideas").glob("*.md"))
+            self.assertEqual(len(ideas), 1)
+            text = ideas[0].read_text(encoding="utf-8")
+            self.assertIn("rough sketch note stays intact", text)
+            self.assertIn("## Captured note", text)
+            self.assertIn("#robotics", text)
+            self.assertIn("source: idea-inbox", text)
+
+    def test_process_inbox_derives_relation_heading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            inbox = vault / "Idea Inbox" / "relation.md"
+            inbox.write_text("# relate 12\n\n- Nano tape track\n- Related: 12\n", encoding="utf-8")
+            process_inbox(vault)
+            idea = scan_ideas(vault)[0]
+            self.assertEqual(idea.title, "Nano tape track")
+            self.assertIn("nano-tape-track", idea.path.name)
+
+    def test_refresh_processes_inbox_and_adds_related_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            cfg = load_config(vault)
+            cfg["research"]["rss"] = False
+            cfg["research"]["arxiv"] = False
+            cfg["research"]["youtube"] = False
+            cfg["research"]["ollama_reflections"] = False
+            save_config(vault, cfg)
+            (vault / "Ideas" / "base.md").write_text("# Pneumatic robot\n\nrib shell actuator\n", encoding="utf-8")
+            (vault / "Idea Inbox" / "capture.md").write_text("rib shell pneumatic actuator variant", encoding="utf-8")
+            result = run_refresh(vault)
+            self.assertEqual(result["status"], "ok")
+            imported = [path for path in (vault / "Ideas").glob("*.md") if path.name != "base.md"]
+            self.assertEqual(len(imported), 1)
+            text = imported[0].read_text(encoding="utf-8")
+            self.assertIn("[[Ideas/base|Pneumatic robot]]", text)
+            self.assertIn("## Categories", text)
 
     def test_feedback_changes_ranking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,17 +259,20 @@ class SignalDeckTests(unittest.TestCase):
                 conn.close()
 
             paths = render_dashboards(vault)
-            media_notes = list((vault / "Media").glob("signal-*.md"))
+            media_notes = list((vault / "Media").glob("*.md"))
             self.assertEqual(len(media_notes), 1)
+            self.assertEqual(media_notes[0].name, "helix-robot-build.md")
             media_text = media_notes[0].read_text(encoding="utf-8")
             self.assertIn("type: signal-media", media_text)
+            self.assertIn('source_title: "Helix robot build"', media_text)
+            self.assertIn("# Helix robot build", media_text)
             self.assertIn("[[Ideas/video|Walking robot]]", media_text)
             self.assertIn("https://www.youtube.com/watch?v=helix", media_text)
             self.assertIn("Watch the foot contact pattern again.", media_text)
             self.assertEqual(note.read_text(encoding="utf-8"), original)
             deck_md = paths["markdown"].read_text(encoding="utf-8")
-            self.assertIn("media note: `Media/signal-", deck_md)
-            self.assertNotIn("[[Media/signal-", deck_md)
+            self.assertIn("media note: `Media/helix-robot-build.md`", deck_md)
+            self.assertNotIn("[[Media/helix-robot-build", deck_md)
 
     def test_obsidian_media_note_regeneration_preserves_personal_notes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -229,12 +301,87 @@ class SignalDeckTests(unittest.TestCase):
             finally:
                 conn.close()
             render_dashboards(vault)
-            media_note = next((vault / "Media").glob("signal-*.md"))
+            media_note = next((vault / "Media").glob("*.md"))
             media_note.write_text(media_note.read_text(encoding="utf-8") + "\nHand-written Obsidian note.\n", encoding="utf-8")
             render_dashboards(vault)
             regenerated = media_note.read_text(encoding="utf-8")
             self.assertIn("Hand-written Obsidian note.", regenerated)
-            self.assertEqual(len(list((vault / "Media").glob("signal-*.md"))), 1)
+            self.assertEqual(len(list((vault / "Media").glob("*.md"))), 1)
+
+    def test_obsidian_media_note_renames_old_long_slug(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "video.md").write_text("# Foot care\n\npreventative foot health\n", encoding="utf-8")
+            conn = connect(vault)
+            try:
+                idea = scan_ideas(vault)[0]
+                upsert_idea(conn, idea)
+                add_discovery(
+                    conn,
+                    {
+                        "idea_id": idea.id,
+                        "source_type": "youtube",
+                        "title": "Modern Advanced Foot Care Leads Houston in Preventative Foot Health Dr A",
+                        "url": "https://www.youtube.com/watch?v=foot",
+                        "summary": "Metadata summary.",
+                        "why": "Matches foot health.",
+                        "score": 0.8,
+                        "novelty": 0.7,
+                        "image_url": "https://img.youtube.com/vi/foot/hqdefault.jpg",
+                        "citations": [],
+                    },
+                )
+            finally:
+                conn.close()
+            media_root = vault / "Media"
+            media_root.mkdir()
+            digest = sha256_text("https://www.youtube.com/watch?v=foot")[:12]
+            old_path = media_root / f"signal-{digest}-modern-advanced-foot-care-leads-houston-in-preventative-foot-health-dr-a.md"
+            old_path.write_text("# Old title\n\n## Personal notes\n\nKeep this.\n", encoding="utf-8")
+            render_dashboards(vault)
+            media_notes = list(media_root.glob("*.md"))
+            self.assertEqual(len(media_notes), 1)
+            compact = media_notes[0]
+            self.assertEqual(compact.name, "advanced-foot-care-preventative-foot-health.md")
+            self.assertIn("Keep this.", compact.read_text(encoding="utf-8"))
+
+    def test_compact_media_title_keeps_six_words_or_less(self) -> None:
+        title = compact_media_title("Modern Advanced Foot Care Leads Houston in Preventative Foot Health Dr A")
+        self.assertEqual(title, "Advanced Foot Care Preventative Foot Health")
+        self.assertLessEqual(len(title.split()), 6)
+
+    def test_duplicate_media_titles_keep_readable_short_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            (vault / "Ideas" / "video.md").write_text("# Walking robot\n\nhelix robot\n", encoding="utf-8")
+            conn = connect(vault)
+            try:
+                idea = scan_ideas(vault)[0]
+                upsert_idea(conn, idea)
+                for index in range(2):
+                    add_discovery(
+                        conn,
+                        {
+                            "idea_id": idea.id,
+                            "source_type": "youtube",
+                            "title": "Pneumatic Pump Six Axis Robot Arm",
+                            "url": f"https://www.youtube.com/watch?v=helix{index}",
+                            "summary": "Metadata summary.",
+                            "why": "Matches walking robot.",
+                            "score": 0.8,
+                            "novelty": 0.7,
+                            "image_url": f"https://img.youtube.com/vi/helix{index}/hqdefault.jpg",
+                            "citations": [],
+                        },
+                    )
+            finally:
+                conn.close()
+            render_dashboards(vault)
+            media_names = sorted(path.name for path in (vault / "Media").glob("*.md"))
+            self.assertEqual(media_names, ["pneumatic-pump-six-axis-robot-2.md", "pneumatic-pump-six-axis-robot-arm.md"])
+            self.assertTrue(all(len(Path(name).stem.split("-")) <= 6 for name in media_names))
 
     def test_obsidian_media_notes_cannot_be_generated_inside_ideas(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -588,7 +735,7 @@ class SignalDeckTests(unittest.TestCase):
             render_dashboards(vault)
             note_text = (vault / "Ideas" / "media.md").read_text(encoding="utf-8")
             self.assertIn("## Attached media", note_text)
-            self.assertIn("Attached walking robot video", note_text)
+            self.assertIn("Attached walking robot", note_text)
 
     def test_nightly_video_research_is_scoped_to_each_idea(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -808,6 +955,17 @@ class SignalDeckTests(unittest.TestCase):
                 loop._tick(cfg)
                 mocked_refresh.assert_called_once_with(vault, "reactive")
             self.assertIsNone(loop.pending_change_at)
+
+    def test_scheduler_watches_inbox_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            ensure_vault(vault)
+            loop = AgentLoop(vault)
+            before = loop._current_mtimes()
+            (vault / "Idea Inbox" / "new.md").write_text("quick vehicle suspension idea", encoding="utf-8")
+            after = loop._current_mtimes()
+            self.assertNotEqual(before, after)
+            self.assertIn("inbox:new.md", after)
 
     def test_attach_candidates_adds_relevant_signal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

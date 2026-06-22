@@ -4,6 +4,7 @@ Signal Deck is a local-first idea radar for an Obsidian vault.
 
 It scans `Ideas/*.md`, keeps your idea text untouched, researches useful signals in the background, then writes:
 
+- formatted imported notes from `Idea Inbox/*.md` into `Ideas/`
 - `Signal Deck.html` - scrollable local dashboard with feedback buttons
 - `Signal Deck.md` - Obsidian-native index
 - `Media/*.md` - generated Obsidian media notes linked to matching ideas
@@ -25,6 +26,7 @@ For a local test vault, use the workspace root or any Obsidian vault path.
 ```powershell
 python -m signal_deck --vault "." init
 python -m signal_deck --vault "." refresh
+python -m signal_deck --vault "." process-inbox
 python -m signal_deck --vault "." render
 python -m signal_deck --vault "." chat-config "focus more on robotics and less youtube"
 python -m signal_deck --vault "." serve --port 8765
@@ -38,6 +40,7 @@ PowerShell helpers:
 
 ```powershell
 .\scripts\start_signal_deck.ps1 -Vault .
+.\scripts\run_signal_agent.ps1 -Vault .
 .\scripts\doctor.ps1 -Vault .
 .\scripts\test_signal_deck.ps1 -Vault .
 ```

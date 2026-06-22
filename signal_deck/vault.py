@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ensure_config_files, load_config
+from .inbox import ensure_inbox
 from .util import relpath, sha256_text, slugify
 
 
@@ -27,6 +28,7 @@ def resolve_vault(path: str | Path | None) -> Path:
 def ensure_vault(vault: Path) -> None:
     vault.mkdir(parents=True, exist_ok=True)
     ensure_config_files(vault)
+    ensure_inbox(vault)
     ideas_dir = vault / str(load_config(vault).get("ideas_dir", "Ideas"))
     ideas_dir.mkdir(parents=True, exist_ok=True)
 

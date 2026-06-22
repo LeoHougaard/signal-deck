@@ -15,6 +15,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "media_dir": "Media",
         "related_idea_blocks": True,
     },
+    "inbox": {
+        "enabled": True,
+        "dir": "Idea Inbox",
+        "archive_dir": "Idea Inbox/Processed",
+        "process_on_refresh": True,
+    },
     "agent_block": {
         "start": "<!-- signal-agent:start -->",
         "end": "<!-- signal-agent:end -->",

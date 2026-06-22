@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 import sqlite3
@@ -7,8 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_config
+from .taxonomy import categorize_text
 from .util import relpath, sha256_text, slugify
-from .vault import is_agent_owned_path, update_agent_block
+from .vault import is_agent_owned_path, strip_agent_blocks, update_agent_block
 
 
 def sync_media_notes(vault: Path, cfg: dict[str, Any] | None = None) -> dict[str, int]:
@@ -43,6 +45,13 @@ def sync_media_notes(vault: Path, cfg: dict[str, Any] | None = None) -> dict[str
     written = 0
     for url, discoveries in grouped.items():
         path = media_note_path(vault, discoveries[0], cfg)
+        existing_path = _existing_media_note_path(vault, discoveries[0], cfg)
+        if existing_path and existing_path != path:
+            if not path.exists():
+                existing_path.rename(path)
+            elif existing_path.name.startswith("signal-") and is_agent_owned_path(vault, existing_path, cfg):
+                existing_path.unlink()
+        _delete_legacy_media_note_paths(vault, discoveries[0], path, cfg)
         if not is_agent_owned_path(vault, path, cfg):
             raise ValueError(f"Refusing to write non-agent-owned media note: {path}")
         existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
@@ -92,7 +101,9 @@ def sync_related_idea_blocks(vault: Path, cfg: dict[str, Any] | None = None) -> 
         if not note_path.exists() or note_path.suffix.lower() != ".md":
             continue
         before = note_path.read_text(encoding="utf-8", errors="replace")
-        block = _render_related_idea_block(grouped.get(idea_id, []), attached.get(idea_id, []), vault, cfg)
+        raw = note_path.read_text(encoding="utf-8", errors="replace")
+        categories = categorize_text(strip_agent_blocks(raw, cfg))
+        block = _render_related_idea_block(grouped.get(idea_id, []), attached.get(idea_id, []), categories, vault, cfg)
         update_agent_block(note_path, block, cfg)
         after = note_path.read_text(encoding="utf-8", errors="replace")
         if after != before:
@@ -103,13 +114,58 @@ def sync_related_idea_blocks(vault: Path, cfg: dict[str, Any] | None = None) -> 
 def media_note_path(vault: Path, discovery: Any, cfg: dict[str, Any] | None = None) -> Path:
     cfg = cfg or load_config(vault)
     media_root = _media_root(vault, cfg)
-    url = str(discovery["url"])
-    digest = sha256_text(url)[:12]
+    title = slugify(compact_media_title(str(discovery["title"])))[:54].strip("-") or "media"
+    existing = _existing_media_note_path(vault, discovery, cfg)
+    return _available_media_note_path(media_root / f"{title}.md", existing)
+
+
+def _existing_media_note_path(vault: Path, discovery: Any, cfg: dict[str, Any] | None = None) -> Path | None:
+    cfg = cfg or load_config(vault)
+    media_root = _media_root(vault, cfg)
+    digest = sha256_text(str(discovery["url"]))[:12]
+    marker = f"signal_id: {json.dumps(digest, ensure_ascii=True)}"
+    for path in sorted(media_root.glob("*.md")):
+        if path.name.startswith("signal-"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if marker in text:
+            return path
     existing = sorted(media_root.glob(f"signal-{digest}-*.md"))
     if existing:
         return existing[0]
-    title = slugify(str(discovery["title"]))[:72].strip("-") or "media"
-    return media_root / f"signal-{digest}-{title}.md"
+    return None
+
+
+def _available_media_note_path(base: Path, existing: Path | None = None) -> Path:
+    if not base.exists() or (existing and base.resolve() == existing.resolve()):
+        return base
+    for index in range(2, 1000):
+        stem = _stem_with_suffix_room(base.stem)
+        candidate = base.with_name(f"{stem}-{index}{base.suffix}")
+        if not candidate.exists() or (existing and candidate.resolve() == existing.resolve()):
+            return candidate
+    raise FileExistsError(f"Could not find a free media note path for {base}")
+
+
+def _delete_legacy_media_note_paths(vault: Path, discovery: Any, keep: Path, cfg: dict[str, Any] | None = None) -> None:
+    cfg = cfg or load_config(vault)
+    media_root = _media_root(vault, cfg)
+    digest = sha256_text(str(discovery["url"]))[:12]
+    for path in media_root.glob(f"signal-{digest}-*.md"):
+        if path.resolve() == keep.resolve():
+            continue
+        if is_agent_owned_path(vault, path, cfg):
+            path.unlink()
+
+
+def _stem_with_suffix_room(stem: str) -> str:
+    parts = [part for part in stem.split("-") if part]
+    if len(parts) <= 5:
+        return stem
+    return "-".join(parts[:5])
 
 
 def media_note_rel_path(vault: Path, discovery: Any, cfg: dict[str, Any] | None = None) -> str:
@@ -142,7 +198,8 @@ def _should_materialize(row: Any) -> bool:
 
 def _render_media_note(vault: Path, url: str, discoveries: list[sqlite3.Row], cfg: dict[str, Any], existing: str = "") -> str:
     primary = discoveries[0]
-    title = str(primary["title"]).strip() or "Media signal"
+    source_title = str(primary["title"]).strip() or "Media signal"
+    title = compact_media_title(source_title)
     source = str(primary["source_type"])
     image_url = str(primary["image_url"] or "")
     citations = _citations(primary)
@@ -152,6 +209,7 @@ def _render_media_note(vault: Path, url: str, discoveries: list[sqlite3.Row], cf
         "type: signal-media",
         f"source: {_yaml_scalar(source)}",
         f"url: {_yaml_scalar(url)}",
+        f"source_title: {_yaml_scalar(source_title)}",
         f"signal_id: {_yaml_scalar(sha256_text(url)[:12])}",
         f"updated: {_yaml_scalar(str(primary['updated_at']))}",
         "---",
@@ -206,10 +264,13 @@ def media_note_idea_link(idea_id: str, idea_title: str) -> str:
 def _render_related_idea_block(
     rows: list[sqlite3.Row],
     attached_media: list[sqlite3.Row],
+    categories: list[str],
     vault: Path,
     cfg: dict[str, Any],
 ) -> str:
-    lines = ["## Related ideas", ""]
+    lines = ["## Categories", ""]
+    lines.extend(f"- #{category}" for category in categories)
+    lines.extend(["", "## Related ideas", ""])
     seen: set[str] = set()
     for row in rows:
         related_id = str(row["related_idea_id"])
@@ -225,9 +286,67 @@ def _render_related_idea_block(
         lines.extend(["", "## Attached media", ""])
         for row in attached_media:
             target = media_note_rel_path(vault, row, cfg).removesuffix(".md")
-            title = str(row["title"] or "Media")
+            title = compact_media_title(str(row["title"] or "Media"))
             lines.append(f"- [[{target}|{title}]]")
     return "\n".join(lines)
+
+
+def compact_media_title(title: str) -> str:
+    clean = html.unescape(str(title or "")).strip()
+    clean = re.sub(r"https?://\S+", " ", clean)
+    clean = re.sub(r"\[[^\]]*\]|\([^\)]*(?:official|full|video|review|tutorial|202\d)[^\)]*\)", " ", clean, flags=re.I)
+    clean = re.sub(r"(?i)\b(?:official|full|complete|ultimate|review|tutorial|explained|overview|introduction|shorts?)\b", " ", clean)
+    clean = re.sub(r"(?i)\b(?:how to|what is|why i|this is|does it work)\b", " ", clean)
+    pieces = [piece.strip(" -_:;,.") for piece in re.split(r"\s(?:[-|:]\s)|\s{2,}", clean) if piece.strip(" -_:;,.")]
+    clean = max(pieces, key=lambda piece: len(_title_tokens(piece)), default=clean)
+    tokens = _title_tokens(clean)
+    filtered = [token for token in tokens if token.lower() not in _MEDIA_TITLE_STOPWORDS]
+    selected = filtered or tokens
+    if not selected:
+        return "Media signal"
+    return " ".join(selected[:6])
+
+
+def _title_tokens(value: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9]+", value)
+
+
+_MEDIA_TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "at",
+    "by",
+    "can",
+    "for",
+    "from",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "i",
+    "leads",
+    "modern",
+    "houston",
+    "of",
+    "on",
+    "or",
+    "the",
+    "that",
+    "how",
+    "why",
+    "to",
+    "using",
+    "with",
+    "you",
+    "your",
+    "dr",
+    "official",
+    "video",
+    "videos",
+}
 
 
 def _attached_media_by_idea(vault: Path) -> dict[str, list[sqlite3.Row]]:
