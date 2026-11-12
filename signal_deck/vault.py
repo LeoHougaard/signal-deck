@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ensure_config_files, load_config
+from .inbox import ensure_inbox
 from .util import relpath, sha256_text, slugify
 
 
@@ -27,6 +28,7 @@ def resolve_vault(path: str | Path | None) -> Path:
 def ensure_vault(vault: Path) -> None:
     vault.mkdir(parents=True, exist_ok=True)
     ensure_config_files(vault)
+    ensure_inbox(vault)
     ideas_dir = vault / str(load_config(vault).get("ideas_dir", "Ideas"))
     ideas_dir.mkdir(parents=True, exist_ok=True)
 
@@ -155,17 +157,22 @@ def strip_agent_blocks(text: str, cfg: dict) -> str:
 
 
 def update_agent_block(note_path: Path, block_markdown: str, cfg: dict) -> None:
-    original = note_path.read_text(encoding="utf-8", errors="replace")
+    original = note_path.read_bytes().decode("utf-8")
     start = str(cfg["agent_block"]["start"])
     end = str(cfg["agent_block"]["end"])
+    if (original.count(start), original.count(end)) not in {(0, 0), (1, 1)} or (
+        start in original and original.index(start) > original.index(end)
+    ):
+        raise ValueError("Refusing to update malformed signal-agent markers. Restore the marker pair first.")
     block = f"{start}\n{block_markdown.rstrip()}\n{end}"
     pattern = re.compile(rf"{re.escape(start)}.*?{re.escape(end)}", re.DOTALL)
     if pattern.search(original):
-        updated = pattern.sub(block, original, count=1)
+        updated = pattern.sub(lambda match: block, original, count=1)
     else:
-        updated = original.rstrip() + "\n\n" + block + "\n"
+        updated = original + "\n\n" + block + "\n"
     assert_only_agent_block_changed(original, updated, cfg)
-    note_path.write_text(updated, encoding="utf-8")
+    if updated != original:
+        note_path.write_bytes(updated.encode("utf-8"))
 
 
 def assert_only_agent_block_changed(original: str, updated: str, cfg: dict) -> None:

@@ -86,7 +86,18 @@ class AgentLoop:
 
     def _current_mtimes(self) -> dict[str, float]:
         cfg = load_config(self.vault)
-        return {idea.id: idea.modified_at for idea in scan_ideas(self.vault, cfg)}
+        mtimes = {idea.id: idea.modified_at for idea in scan_ideas(self.vault, cfg)}
+        inbox_cfg = cfg.get("inbox", {})
+        if inbox_cfg.get("enabled", True):
+            inbox_root = self.vault / str(inbox_cfg.get("dir", "Idea Inbox"))
+            archive_root = (self.vault / str(inbox_cfg.get("archive_dir", "Idea Inbox/Processed"))).resolve()
+            if inbox_root.exists():
+                for path in inbox_root.glob("*.md"):
+                    resolved = path.resolve()
+                    if archive_root in resolved.parents:
+                        continue
+                    mtimes[f"inbox:{path.name}"] = path.stat().st_mtime
+        return mtimes
 
 
 def parse_nightly_time(value: str) -> tuple[int, int]:

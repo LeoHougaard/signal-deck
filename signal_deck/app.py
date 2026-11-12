@@ -7,6 +7,7 @@ from pathlib import Path
 from .chat_config import apply_chat_config
 from .diagnostics import doctor, export_json, status
 from .importer import import_markdown_zip
+from .inbox import process_inbox
 from .render import render_dashboards
 from .research import run_codex_agent_test, run_refresh
 from .scheduler import AgentLoop
@@ -33,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--idea", help="Idea id, path, or title filter")
 
     sub.add_parser("render", help="Regenerate Signal Deck.html and Signal Deck.md")
+    sub.add_parser("process-inbox", help="Import simple notes from Idea Inbox into Ideas")
 
     sub.add_parser("status", help="Print Signal Deck state as JSON")
     sub.add_parser("doctor", help="Check local setup and provider availability")
@@ -80,6 +82,17 @@ def main(argv: list[str] | None = None) -> int:
         paths = render_dashboards(vault)
         print(paths["html"])
         print(paths["markdown"])
+        return 0
+
+    if args.command == "process-inbox":
+        ensure_vault(vault)
+        result = process_inbox(vault)
+        if result["processed"]:
+            refresh = run_refresh(vault, "manual")
+            result["refresh"] = refresh
+        else:
+            render_dashboards(vault)
+        print(json.dumps(result, indent=2, ensure_ascii=True))
         return 0
 
     if args.command == "status":

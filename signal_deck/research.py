@@ -17,6 +17,7 @@ from typing import Any
 
 from . import state
 from .config import signal_dir, load_config, load_sources
+from .inbox import process_inbox
 from .render import render_dashboards
 from .obsidian import sync_media_notes, sync_related_idea_blocks
 from .scoring import discovery_score
@@ -40,6 +41,8 @@ class Candidate:
 def run_refresh(vault: Path, kind: str = "manual", idea_filter: str | None = None) -> dict[str, Any]:
     ensure_vault(vault)
     cfg = load_config(vault)
+    if cfg.get("inbox", {}).get("process_on_refresh", True) and not idea_filter:
+        process_inbox(vault, cfg)
     sources = load_sources(vault)
     conn = state.connect(vault)
     run_id = state.record_run_start(conn, kind)
