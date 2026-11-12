@@ -49,9 +49,6 @@ def sync_media_notes(vault: Path, cfg: dict[str, Any] | None = None) -> dict[str
         if existing_path and existing_path != path:
             if not path.exists():
                 existing_path.rename(path)
-            elif existing_path.name.startswith("signal-") and is_agent_owned_path(vault, existing_path, cfg):
-                existing_path.unlink()
-        _delete_legacy_media_note_paths(vault, discoveries[0], path, cfg)
         if not is_agent_owned_path(vault, path, cfg):
             raise ValueError(f"Refusing to write non-agent-owned media note: {path}")
         existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
@@ -148,17 +145,6 @@ def _available_media_note_path(base: Path, existing: Path | None = None) -> Path
         if not candidate.exists() or (existing and candidate.resolve() == existing.resolve()):
             return candidate
     raise FileExistsError(f"Could not find a free media note path for {base}")
-
-
-def _delete_legacy_media_note_paths(vault: Path, discovery: Any, keep: Path, cfg: dict[str, Any] | None = None) -> None:
-    cfg = cfg or load_config(vault)
-    media_root = _media_root(vault, cfg)
-    digest = sha256_text(str(discovery["url"]))[:12]
-    for path in media_root.glob(f"signal-{digest}-*.md"):
-        if path.resolve() == keep.resolve():
-            continue
-        if is_agent_owned_path(vault, path, cfg):
-            path.unlink()
 
 
 def _stem_with_suffix_room(stem: str) -> str:

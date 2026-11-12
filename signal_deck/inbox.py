@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .config import load_config
 from .taxonomy import categorize_text
-from .util import slugify
+from .util import sha256_text, slugify
 
 
 def ensure_inbox(vault: Path, cfg: dict[str, Any] | None = None) -> None:
@@ -36,16 +39,57 @@ def process_inbox(vault: Path, cfg: dict[str, Any] | None = None) -> dict[str, A
     for path in sorted(inbox_root.glob("*.md")):
         if archive_root in path.resolve().parents:
             continue
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        raw = path.read_bytes().decode("utf-8")
         if not raw.strip():
             continue
-        title = _extract_inbox_title(raw, path)
-        idea_path = _next_idea_path(ideas_root, title)
-        idea_path.write_text(_format_imported_note(title, raw, path, cfg), encoding="utf-8")
-        archive_path = _unique_archive_path(archive_root / f"{datetime.now().date().isoformat()}-{path.name}")
+        # Keep the destination across interruptions, even if the idea is edited
+        # before a failed archive move is retried.
+        pending_root = vault / ".signal" / "inbox_pending"
+        pending_root.mkdir(parents=True, exist_ok=True)
+        pending = pending_root / f"{sha256_text(path.relative_to(vault.resolve()).as_posix())}.json"
+        if pending.exists():
+            record = json.loads(pending.read_text(encoding="utf-8"))
+            if record["body_hash"] != sha256_text(raw):
+                raise ValueError(f"Inbox capture changed during recovery: {path}. Preserve both versions before retrying.")
+            idea_path = vault / record["idea"]
+            archive_path = vault / record["archive"]
+            title = record["title"]
+        else:
+            title = _extract_inbox_title(raw, path)
+            idea_path = _next_idea_path(ideas_root, title)
+            archive_path = _unique_archive_path(archive_root / f"{datetime.now().date().isoformat()}-{path.name}")
+            record = {
+                "body_hash": sha256_text(raw), "title": title,
+                "capture_id": uuid.uuid4().hex,
+                "idea": idea_path.relative_to(vault).as_posix(),
+                "archive": archive_path.relative_to(vault).as_posix(),
+            }
+            _atomic_write(pending, json.dumps(record))
+        if not idea_path.exists():
+            _atomic_write(idea_path, _format_imported_note(title, raw, path, cfg, record["capture_id"]))
+        marker = f'inbox_capture_id: {json.dumps(record["capture_id"])}'
+        if marker not in idea_path.read_text(encoding="utf-8"):
+            raise ValueError(f"Inbox recovery destination belongs to another note: {idea_path}")
+        if archive_path.exists():
+            raise ValueError(f"Inbox archive destination already exists: {archive_path}")
         shutil.move(str(path), str(archive_path))
+        pending.unlink()
         created.append(idea_path.relative_to(vault).as_posix())
     return {"processed": len(created), "created": created}
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=path.parent, delete=False) as stream:
+            temp_path = Path(stream.name)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def _extract_inbox_title(text: str, path: Path) -> str:
@@ -88,7 +132,7 @@ def _next_idea_path(ideas_root: Path, title: str) -> Path:
     raise ValueError("Could not create a unique idea filename.")
 
 
-def _format_imported_note(title: str, raw: str, source_path: Path, cfg: dict[str, Any]) -> str:
+def _format_imported_note(title: str, raw: str, source_path: Path, cfg: dict[str, Any], capture_id: str) -> str:
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     categories = categorize_text(f"{title}\n{raw}")
     frontmatter = [
@@ -97,12 +141,13 @@ def _format_imported_note(title: str, raw: str, source_path: Path, cfg: dict[str
         "source: idea-inbox",
         f"captured: {json.dumps(now)}",
         f"inbox_note: {json.dumps(source_path.name)}",
+        f"inbox_capture_id: {json.dumps(capture_id)}",
         "categories:",
         *[f"  - {category}" for category in categories],
         "---",
         "",
     ]
-    body = raw.rstrip()
+    body = raw
     agent_block = [
         "",
         str(cfg["agent_block"]["start"]),

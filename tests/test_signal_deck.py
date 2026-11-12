@@ -339,8 +339,14 @@ class SignalDeckTests(unittest.TestCase):
             digest = sha256_text("https://www.youtube.com/watch?v=foot")[:12]
             old_path = media_root / f"signal-{digest}-modern-advanced-foot-care-leads-houston-in-preventative-foot-health-dr-a.md"
             old_path.write_text("# Old title\n\n## Personal notes\n\nKeep this.\n", encoding="utf-8")
+            recovery_copy = media_root / f"signal-{digest}-recovery-copy.md"
+            recovery_copy.write_text("## Personal notes\n\nDifferent handwritten recovery text.\n", encoding="utf-8")
+            recovery_bytes = recovery_copy.read_bytes()
             render_dashboards(vault)
-            media_notes = list(media_root.glob("*.md"))
+            # Automatic regeneration must not delete another copy with unique
+            # personal text. Legacy duplicate cleanup is a separate operation.
+            self.assertEqual(recovery_copy.read_bytes(), recovery_bytes)
+            media_notes = [path for path in media_root.glob("*.md") if path != recovery_copy]
             self.assertEqual(len(media_notes), 1)
             compact = media_notes[0]
             self.assertEqual(compact.name, "advanced-foot-care-preventative-foot-health.md")
