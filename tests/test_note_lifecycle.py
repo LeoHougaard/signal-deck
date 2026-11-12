@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -14,6 +16,71 @@ from signal_deck.vault import ensure_vault, strip_agent_blocks, update_agent_blo
 
 
 class NoteLifecycleTests(unittest.TestCase):
+    def test_vault_alias_import_and_canonical_recovery_share_destinations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = (Path(tmp) / "Long vault directory name").resolve()
+            ensure_vault(vault)
+            alias = vault / ".." / vault.name
+            if os.name == "nt":
+                import ctypes
+                short_path = ctypes.create_unicode_buffer(32768)
+                length = ctypes.windll.kernel32.GetShortPathNameW(str(vault), short_path, len(short_path))
+                if 0 < length < len(short_path) and Path(short_path.value) != vault:
+                    alias = Path(short_path.value)
+            # Exercise real Windows short names where available; the parent
+            # alias exercises the same lexical/resolved mismatch everywhere.
+            self.assertNotEqual(alias, vault)
+            self.assertEqual(alias.resolve(), vault)
+            capture = vault / "Idea Inbox" / "quick.md"
+            raw = b"Pneumatic rib robot\r\n\r\nKeep my text.  \r\n"
+            capture.write_bytes(raw)
+            with patch("signal_deck.inbox.shutil.move", side_effect=PermissionError):
+                with self.assertRaises(PermissionError):
+                    process_inbox(alias)
+            note = next((vault / "Ideas").glob("*.md"))
+            edited = note.read_bytes() + b"\nHuman edit during recovery.\n"
+            note.write_bytes(edited)
+            result = process_inbox(vault)
+            self.assertEqual(result["created"], [note.relative_to(vault).as_posix()])
+            self.assertEqual(note.read_bytes(), edited)
+            self.assertEqual(next((vault / "Idea Inbox" / "Processed").glob("*.md")).read_bytes(), raw)
+            self.assertFalse(list((vault / ".signal" / "inbox_pending").glob("*.json")))
+            capture.write_bytes(b"Second capture through canonical path")
+            with patch("signal_deck.inbox.shutil.move", side_effect=PermissionError):
+                with self.assertRaises(PermissionError):
+                    process_inbox(vault)
+            self.assertEqual(process_inbox(alias)["processed"], 1)
+            self.assertEqual(process_inbox(alias)["processed"], 0)
+            self.assertEqual(len(list((vault / "Ideas").glob("*.md"))), 2)
+
+    def test_recovery_paths_cannot_escape_configured_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = (Path(tmp) / "vault").resolve()
+            ensure_vault(vault)
+            capture = vault / "Idea Inbox" / "quick.md"
+            capture.write_bytes(b"Keep capture")
+            outside = vault.parent / "outside.md"
+            outside.write_bytes(b"Protected outside text")
+            with patch("signal_deck.inbox.shutil.move", side_effect=PermissionError):
+                with self.assertRaises(PermissionError):
+                    process_inbox(vault)
+            receipt = next((vault / ".signal" / "inbox_pending").glob("*.json"))
+            record = json.loads(receipt.read_text(encoding="utf-8"))
+            note = vault / record["idea"]
+            before = note.read_bytes()
+            for field in ("idea", "archive"):
+                for escape in ("../outside.md", str(outside), "Other/note.md"):
+                    with self.subTest(field=field, escape=escape):
+                        receipt.write_text(json.dumps({**record, field: escape}), encoding="utf-8")
+                        with self.assertRaisesRegex(ValueError, "must stay inside"):
+                            process_inbox(vault)
+                        self.assertEqual(outside.read_bytes(), b"Protected outside text")
+                        self.assertEqual(note.read_bytes(), before)
+                        self.assertEqual(capture.read_bytes(), b"Keep capture")
+                        self.assertFalse((vault / "Other").exists())
+            receipt.write_text(json.dumps(record), encoding="utf-8")
+            self.assertEqual(process_inbox(vault)["processed"], 1)
+
     def test_pending_import_survives_restore_to_another_vault_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / "original"

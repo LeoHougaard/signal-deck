@@ -24,19 +24,23 @@ def ensure_inbox(vault: Path, cfg: dict[str, Any] | None = None) -> None:
 
 
 def process_inbox(vault: Path, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    # Resolve the root once, including Windows 8.3 aliases, before deriving
+    # paths or recording relative destinations for interrupted imports.
+    vault = vault.resolve()
     cfg = cfg or load_config(vault)
     inbox_cfg = cfg.get("inbox", {})
     if not inbox_cfg.get("enabled", True):
         return {"processed": 0, "created": []}
-    inbox_root = (vault / str(inbox_cfg.get("dir", "Idea Inbox"))).resolve()
-    archive_root = (vault / str(inbox_cfg.get("archive_dir", "Idea Inbox/Processed"))).resolve()
-    ideas_root = (vault / str(cfg.get("ideas_dir", "Ideas"))).resolve()
+    inbox_root = _contained_path(vault, vault / str(inbox_cfg.get("dir", "Idea Inbox")))
+    archive_root = _contained_path(vault, vault / str(inbox_cfg.get("archive_dir", "Idea Inbox/Processed")))
+    ideas_root = _contained_path(vault, vault / str(cfg.get("ideas_dir", "Ideas")))
     inbox_root.mkdir(parents=True, exist_ok=True)
     archive_root.mkdir(parents=True, exist_ok=True)
     ideas_root.mkdir(parents=True, exist_ok=True)
 
     created: list[str] = []
     for path in sorted(inbox_root.glob("*.md")):
+        _contained_path(inbox_root, path)
         if archive_root in path.resolve().parents:
             continue
         raw = path.read_bytes().decode("utf-8")
@@ -44,15 +48,15 @@ def process_inbox(vault: Path, cfg: dict[str, Any] | None = None) -> dict[str, A
             continue
         # Keep the destination across interruptions, even if the idea is edited
         # before a failed archive move is retried.
-        pending_root = vault / ".signal" / "inbox_pending"
+        pending_root = _contained_path(vault, vault / ".signal" / "inbox_pending")
         pending_root.mkdir(parents=True, exist_ok=True)
-        pending = pending_root / f"{sha256_text(path.relative_to(vault.resolve()).as_posix())}.json"
+        pending = pending_root / f"{sha256_text(path.relative_to(vault).as_posix())}.json"
         if pending.exists():
             record = json.loads(pending.read_text(encoding="utf-8"))
             if record["body_hash"] != sha256_text(raw):
                 raise ValueError(f"Inbox capture changed during recovery: {path}. Preserve both versions before retrying.")
-            idea_path = vault / record["idea"]
-            archive_path = vault / record["archive"]
+            idea_path = _contained_path(ideas_root, vault / record["idea"])
+            archive_path = _contained_path(archive_root, vault / record["archive"])
             title = record["title"]
         else:
             title = _extract_inbox_title(raw, path)
@@ -76,6 +80,15 @@ def process_inbox(vault: Path, cfg: dict[str, Any] | None = None) -> dict[str, A
         pending.unlink()
         created.append(idea_path.relative_to(vault).as_posix())
     return {"processed": len(created), "created": created}
+
+
+def _contained_path(root: Path, path: Path) -> Path:
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"Inbox path must stay inside {root}: {path}") from exc
+    return resolved
 
 
 def _atomic_write(path: Path, text: str) -> None:

@@ -10,7 +10,7 @@ The dated portfolio audit was background evidence; results below were run again.
   capture whitespace was lost, a changed capture after archive failure was
   accepted as another import, and a generated regex containing `\1` raised an
   invalid group reference error. The ordinary edit/refresh/restore case passed.
-- The final suite passed: 40 tests, including seven isolated lifecycle tests.
+- The initial local suite passed: 40 tests, including seven isolated lifecycle tests.
 - `python -m compileall -q signal_deck tests` and `git diff --check` passed.
 - A separate temporary vault passed actual CLI `init`, `process-inbox`,
   `refresh`, `render`, and `status`. Human edits survived refresh.
@@ -28,6 +28,29 @@ regeneration also preserves extra legacy copies with distinct personal notes;
 automatic duplicate deletion was removed and its regression test passes.
 Malformed block markers stop writes; literal backslashes, line endings, Markdown
 trailing whitespace, and unchanged-note modification times are preserved.
+
+## Windows CI continuation
+
+The first PR run, `43243014032` at source `3747942`, failed eight inbox tests.
+Python 3.14 resolved the runner's short temporary path (`RUNNER~1`) to its long
+directory name, while relative destinations were still calculated against the
+unresolved vault root. Local results above did not establish CI success.
+
+The fix canonicalizes the vault once before deriving configured, pending and
+recovery paths. Configured paths remain inside the vault; recovered destinations
+must remain inside their configured Ideas/archive directories. Rejected paths do
+not write or move the capture or authored notes.
+
+Two new regressions cover alias/canonical import and retry in both directions,
+including edits between failure and recovery, and traversal through relative,
+absolute and wrong-folder receipt destinations. On Windows the alias test uses
+`GetShortPathNameW` when supported, otherwise a real parent-directory alias; it
+runs without skips on other platforms. The new alias test reproduced the original
+`relative_to` exception against `3747942` locally using a real `LONGVA~1` path,
+without making another project checkout or copy.
+The corrected local suite passes all 42 tests, including nine lifecycle tests;
+the compile and whitespace checks also pass. Hosted CI must qualify this corrected
+head and the actual merged commit independently of the failed initial run.
 
 Lifecycle fixtures disable external research. The existing suite also passed
 media personal-note preservation, discovery relevance, feedback and HTTP checks.
